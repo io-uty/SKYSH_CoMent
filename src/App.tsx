@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import Onboarding, { type OnboardingResult } from "./Onboarding";
 import { seedAlerts, seedMentors, seedSignals } from "./data/seed";
-import { firestore, getSessionUserId, saveOnboardingResult, subscribeToCollection } from "./lib/firebase";
+import { callMentorChat, firestore, getSessionUserId, saveOnboardingResult, subscribeToCollection, type ChatMessage as ApiChatMessage } from "./lib/firebase";
 import type { CoachingAlert, MarketSignal, Mentor, MentorPattern } from "./types";
 
 const fallbackChartBars = [
@@ -305,6 +305,7 @@ function App() {
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [chatDraft, setChatDraft] = useState("");
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [isMentorTyping, setIsMentorTyping] = useState(false);
   const [ticker, setTicker] = useState<UpbitTicker>(fallbackTicker);
   const [chartCandles, setChartCandles] = useState<ChartCandle[]>(fallbackChartCandles);
   const [marketUpdatedAt, setMarketUpdatedAt] = useState("Seed data");
@@ -619,23 +620,67 @@ function App() {
     },
   ];
 
-  const sendChatMessage = () => {
+  const sendChatMessage = async () => {
     const trimmedMessage = chatDraft.trim();
+    if (!trimmedMessage || isMentorTyping) return;
 
-    if (!trimmedMessage) {
-      return;
-    }
-
-    setChatMessages((messages) => [
-      ...messages,
-      {
-        id: `mentee-${Date.now()}`,
-        author: "mentee",
-        body: trimmedMessage,
-        time: "방금",
-      },
-    ]);
+    // 멘티 메시지 즉시 추가
+    const userUiMessage: ChatMessage = {
+      id: `mentee-${Date.now()}`,
+      author: "mentee",
+      body: trimmedMessage,
+      time: new Intl.DateTimeFormat("ko-KR", { hour: "2-digit", minute: "2-digit" }).format(new Date()),
+    };
+    setChatMessages((prev) => [...prev, userUiMessage]);
     setChatDraft("");
+    setIsMentorTyping(true);
+
+    // Claude API 호출용 전체 대화 기록 구성 (baseChatMessages + chatMessages + 새 메시지)
+    const history: ApiChatMessage[] = [
+      ...baseChatMessages.map((m) => ({
+        role: (m.author === "mentor" ? "assistant" : "user") as "user" | "assistant",
+        content: m.body,
+      })),
+      ...chatMessages.map((m) => ({
+        role: (m.author === "mentor" ? "assistant" : "user") as "user" | "assistant",
+        content: m.body,
+      })),
+      { role: "user" as const, content: trimmedMessage },
+    ];
+
+    try {
+      const reply = await callMentorChat({
+        mentor_id: selectedMentor.id,
+        mentor_name: selectedMentor.name,
+        mentor_style: selectedMentor.style,
+        mentor_specialty: selectedMentor.specialty,
+        mentor_philosophy: selectedMentor.philosophy,
+        messages: history,
+      });
+
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          id: `mentor-${Date.now()}`,
+          author: "mentor",
+          body: reply,
+          time: new Intl.DateTimeFormat("ko-KR", { hour: "2-digit", minute: "2-digit" }).format(new Date()),
+        },
+      ]);
+    } catch (error) {
+      console.error("멘토 채팅 오류:", error);
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          id: `mentor-err-${Date.now()}`,
+          author: "mentor",
+          body: "죄송합니다, 잠시 연결이 원활하지 않습니다. 다시 시도해 주세요.",
+          time: "방금",
+        },
+      ]);
+    } finally {
+      setIsMentorTyping(false);
+    }
   };
 
   const startEditingPrinciples = () => {
@@ -1418,20 +1463,33 @@ function App() {
                   <span>{message.time}</span>
                 </div>
               ))}
+              {isMentorTyping && (
+                <div className="chat-bubble mentor">
+                  <p style={{ color: "#94a3b8", fontStyle: "italic" }}>
+                    {selectedMentor.name} 멘토가 입력 중...
+                  </p>
+                </div>
+              )}
             </div>
 
             <div className="chat-composer">
               <input
+                disabled={isMentorTyping}
                 onChange={(event) => setChatDraft(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    sendChatMessage();
+                  if (event.key === "Enter" && !isMentorTyping) {
+                    void sendChatMessage();
                   }
                 }}
-                placeholder="멘토에게 남길 질문을 입력하세요"
+                placeholder={isMentorTyping ? "멘토가 답변 중입니다..." : "멘토에게 질문을 입력하세요"}
                 value={chatDraft}
               />
-              <button className="solid-button" onClick={sendChatMessage}>
+              <button
+                className="solid-button"
+                disabled={isMentorTyping}
+                onClick={() => void sendChatMessage()}
+                style={{ opacity: isMentorTyping ? 0.5 : 1 }}
+              >
                 전송
               </button>
             </div>
