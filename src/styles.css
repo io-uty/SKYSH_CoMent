@@ -1381,6 +1381,10 @@ h1 {
   font-size: 16px;
 }
 
+.mentor-profile-stats b.profit-rate {
+  color: #f04f64;
+}
+
 .chat-entry-card {
   display: grid;
   gap: 7px;
