@@ -13,6 +13,11 @@ const upbitHistoricalCandlesEndpoint =
   import.meta.env.VITE_UPBIT_HISTORICAL_CANDLES_ENDPOINT ?? "/api/upbitHistoricalCandles";
 const marketRefreshMs = 10000;
 const visibleCandleCount = 72;
+const defaultInvestmentPrinciples = [
+  "감정적인 투자 금지",
+  "끝까지 가면 내가 다 이김",
+  "위의 2가지를 지킬 것",
+];
 const marketTimeframes = [
   {
     id: "1m",
@@ -312,6 +317,9 @@ function App() {
     Partial<Record<MarketTimeframe, string>>
   >({});
   const [hoveredCandleIndex, setHoveredCandleIndex] = useState<number | null>(null);
+  const [investmentPrinciples, setInvestmentPrinciples] = useState(defaultInvestmentPrinciples);
+  const [principleDrafts, setPrincipleDrafts] = useState(defaultInvestmentPrinciples);
+  const [isEditingPrinciples, setIsEditingPrinciples] = useState(false);
 
   const activeTimeframeConfig =
     marketTimeframes.find((timeframe) => timeframe.id === activeTimeframe) ?? marketTimeframes[1];
@@ -630,6 +638,23 @@ function App() {
     setChatDraft("");
   };
 
+  const startEditingPrinciples = () => {
+    setPrincipleDrafts(investmentPrinciples);
+    setIsEditingPrinciples(true);
+  };
+
+  const cancelEditingPrinciples = () => {
+    setPrincipleDrafts(investmentPrinciples);
+    setIsEditingPrinciples(false);
+  };
+
+  const saveInvestmentPrinciples = () => {
+    setInvestmentPrinciples(
+      principleDrafts.map((principle, index) => principle.trim() || defaultInvestmentPrinciples[index]),
+    );
+    setIsEditingPrinciples(false);
+  };
+
   if (!hasCompletedOnboarding) {
     return <Onboarding onComplete={handleOnboardingComplete} />;
   }
@@ -847,10 +872,47 @@ function App() {
                   <p className={`asset-change ${marketDirection}`}>{marketChangeText}</p>
                 </article>
 
-                <article className="mini-card">
-                  <span>멘토 수익률</span>
-                  <strong>+{selectedMentor.verifiedReturn.toFixed(1)}%</strong>
-                  <p>{selectedMentor.badge}</p>
+                <article className="principles-card">
+                  <div className="principles-card-head">
+                    <span>나의 투자 원칙</span>
+                    {isEditingPrinciples ? (
+                      <div className="principles-actions">
+                        <button type="button" onClick={cancelEditingPrinciples}>
+                          취소
+                        </button>
+                        <button className="primary" type="button" onClick={saveInvestmentPrinciples}>
+                          저장
+                        </button>
+                      </div>
+                    ) : (
+                      <button type="button" onClick={startEditingPrinciples}>
+                        수정하기
+                      </button>
+                    )}
+                  </div>
+                  {isEditingPrinciples ? (
+                    <div className="principle-editor" aria-label="나의 투자 원칙 수정">
+                      {principleDrafts.map((principle, index) => (
+                        <label key={`principle-draft-${index + 1}`}>
+                          <span>{index + 1}</span>
+                          <input
+                            value={principle}
+                            onChange={(event) => {
+                              const nextDrafts = [...principleDrafts];
+                              nextDrafts[index] = event.target.value;
+                              setPrincipleDrafts(nextDrafts);
+                            }}
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  ) : (
+                    <ol className="principle-list">
+                      {investmentPrinciples.map((principle, index) => (
+                        <li key={`principle-${index + 1}`}>{principle}</li>
+                      ))}
+                    </ol>
+                  )}
                 </article>
 
                 <article className="mini-card">
@@ -1007,13 +1069,23 @@ function App() {
 
                 <div className="chart-insight-strip">
                   <div className="replay-card">
-                    <span>Emotion Replay</span>
-                    <p>급락 후 평균 5분 안에 매도 패턴</p>
-                    <div className="replay-dots">
-                      <i />
-                      <i />
-                      <i />
-                      <i />
+                    <div className="replay-heading">
+                      <span>Emotion Replay</span>
+                      <p>"당신은 급락 후 평균 5분 안에 매도하는 패턴이 있습니다"</p>
+                    </div>
+                    <div className="replay-timeline" aria-label="Emotion Replay timeline">
+                      {[
+                        { time: "10:32", label: "급락 시작", tone: "lime" },
+                        { time: "10:34", label: "뉴스 검색", tone: "blue" },
+                        { time: "10:36", label: "공포 투매", tone: "lime" },
+                        { time: "10:48", label: "반등 성공", tone: "lime" },
+                      ].map((event) => (
+                        <div className="replay-event" key={event.time}>
+                          <i className={event.tone} />
+                          <strong>{event.time}</strong>
+                          <span>{event.label}</span>
+                        </div>
+                      ))}
                     </div>
                   </div>
                   <div className="upbit-sync-card">

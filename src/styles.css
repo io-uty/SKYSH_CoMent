@@ -49,6 +49,7 @@ button {
 .status-strip,
 .asset-card,
 .mini-card,
+.principles-card,
 .chart-card,
 .orderbook,
 .mentor-advice,
@@ -595,12 +596,13 @@ h1 {
 
 .metric-grid {
   display: grid;
-  grid-template-columns: minmax(300px, 1.4fr) 1fr 1fr;
+  grid-template-columns: minmax(300px, 1.2fr) minmax(340px, 1.35fr) minmax(220px, 0.9fr);
   gap: 12px;
 }
 
 .asset-card,
-.mini-card {
+.mini-card,
+.principles-card {
   min-height: 132px;
   padding: 18px;
   border-radius: 8px;
@@ -659,6 +661,125 @@ h1 {
 .mini-card p {
   margin: 0;
   color: #657386;
+  font-size: 13px;
+}
+
+.principles-card {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  box-shadow: 0 1px 0 rgba(15, 85, 182, 0.02);
+}
+
+.principles-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.principles-card-head > span {
+  color: #657386;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.principles-card-head button,
+.principles-actions button {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid #d8e3f1;
+  border-radius: 6px;
+  color: #0f55b6;
+  background: #f3f8ff;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.principles-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.principles-actions button.primary {
+  border-color: #0f7cff;
+  color: #ffffff;
+  background: #0f7cff;
+}
+
+.principle-list {
+  counter-reset: principle;
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  color: #243042;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.35;
+  list-style: none;
+}
+
+.principle-list li {
+  counter-increment: principle;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 29px;
+  padding: 5px 9px;
+  border: 1px solid #e5edf7;
+  border-radius: 6px;
+  background: #f8fbff;
+}
+
+.principle-list li::before {
+  content: counter(principle);
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  color: #0f55b6;
+  background: #eaf3ff;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.principle-editor {
+  display: grid;
+  gap: 7px;
+}
+
+.principle-editor label {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.principle-editor label span {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  color: #0f55b6;
+  background: #eef5ff;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.principle-editor input {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid #d8e3f1;
+  border-radius: 6px;
+  color: #243042;
+  background: #ffffff;
+  font: inherit;
   font-size: 13px;
 }
 
@@ -980,7 +1101,7 @@ h1 {
 
 .chart-insight-strip {
   display: grid;
-  grid-template-columns: minmax(230px, 320px) 1fr;
+  grid-template-columns: minmax(360px, 420px) 1fr;
   gap: 12px;
   padding: 12px 18px 16px;
   border-top: 1px solid #e2e7ef;
@@ -988,27 +1109,75 @@ h1 {
 }
 
 .replay-card {
-  padding: 14px 16px;
+  padding: 22px 24px;
   border: 1px solid #d8e1ed;
   background: #ffffff;
 }
 
-.replay-card p {
-  margin: 8px 0 12px;
-  color: #405066;
-  font-size: 13px;
+.replay-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 22px;
+  align-items: start;
 }
 
-.replay-dots {
-  display: flex;
-  justify-content: space-between;
+.replay-heading span {
+  color: #0f55b6;
+  font-size: 14px;
+  line-height: 1.15;
 }
 
-.replay-dots i {
-  width: 11px;
-  height: 11px;
+.replay-heading p {
+  margin: 0;
+  color: #df2e2e;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.replay-timeline {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 32px;
+}
+
+.replay-event {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  min-width: 0;
+  text-align: center;
+}
+
+.replay-event i {
+  width: 15px;
+  height: 15px;
   border-radius: 50%;
-  background: #0f7cff;
+  box-shadow: 0 0 18px rgba(178, 232, 47, 0.32);
+}
+
+.replay-event i.lime {
+  background: #a8e238;
+}
+
+.replay-event i.blue {
+  background: #61afd1;
+  box-shadow: 0 0 18px rgba(97, 175, 209, 0.28);
+}
+
+.replay-event strong {
+  color: #224cff;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.replay-event span {
+  color: #676f7c;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .upbit-sync-card {
