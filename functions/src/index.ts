@@ -348,7 +348,7 @@ const QUESTIONS = [
 
 // ─── Function 1: POST /analyzeInvestmentType ──────────────────────────────────
 export const analyzeInvestmentType = onRequest(
-  { cors: true },
+  { cors: true, secrets: ["ANTHROPIC_API_KEY"] },
   async (req, res) => {
     if (req.method !== "POST") {
       res.status(405).json({ success: false, error: "POST 메서드만 허용됩니다." });
@@ -433,7 +433,7 @@ export const analyzeInvestmentType = onRequest(
 );
 
 // ─── Function 2: POST /processPost ───────────────────────────────────────────
-export const processPost = onRequest({ cors: true }, async (req, res) => {
+export const processPost = onRequest({ cors: true, secrets: ["ANTHROPIC_API_KEY"] }, async (req, res) => {
   if (req.method !== "POST") {
     res.status(405).json({ success: false, error: "POST 메서드만 허용됩니다." });
     return;
@@ -506,5 +506,95 @@ export const processPost = onRequest({ cors: true }, async (req, res) => {
   } catch (error) {
     console.error("processPost 오류:", error);
     res.status(500).json({ success: false, error: "Claude API 호출 실패" });
+  }
+});
+
+// ─── 멀티턴 Claude 호출 (채팅 전용) ─────────────────────────────────────────
+type ClaudeChatMessage = { role: "user" | "assistant"; content: string };
+
+const callClaudeChat = async (
+  systemPrompt: string,
+  messages: ClaudeChatMessage[]
+): Promise<string> => {
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": process.env.ANTHROPIC_API_KEY!,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 512,
+      system: systemPrompt,
+      messages,
+    }),
+  });
+
+  const data = (await response.json()) as {
+    content: Array<{ type: string; text: string }>;
+    error?: { message: string };
+  };
+
+  if (!response.ok) {
+    throw new Error(`Claude API 오류: ${data.error?.message ?? response.status}`);
+  }
+
+  return data.content[0].text;
+};
+
+// ─── Function 3: POST /chatWithMentor ────────────────────────────────────────
+export const chatWithMentor = onRequest({ cors: true, secrets: ["ANTHROPIC_API_KEY"] }, async (req, res) => {
+  if (req.method !== "POST") {
+    res.status(405).json({ success: false, error: "POST 메서드만 허용됩니다." });
+    return;
+  }
+
+  const { mentor_id, mentor_name, mentor_style, mentor_specialty, mentor_philosophy, messages } =
+    req.body as {
+      mentor_id?: string;
+      mentor_name?: string;
+      mentor_style?: string;
+      mentor_specialty?: string;
+      mentor_philosophy?: string;
+      messages?: ClaudeChatMessage[];
+    };
+
+  if (!mentor_id || !mentor_name || !messages || messages.length === 0) {
+    res.status(400).json({ success: false, error: "필수 필드가 누락되었습니다." });
+    return;
+  }
+
+  // 대화 기록은 최근 20턴으로 제한
+  const trimmedMessages = messages.slice(-20);
+
+  const systemPrompt = `
+너는 코인 멘토링 플랫폼 Coment의 멘토 ${mentor_name}이야. 멘티와 1:1 코칭 채팅을 진행하고 있어.
+
+[멘토 프로필]
+- 이름: ${mentor_name}
+- 전문 분야: ${mentor_specialty ?? "코인 투자 전략"}
+- 코칭 스타일: ${mentor_style ?? "균형형 매매"}
+- 철학: ${mentor_philosophy ?? "근거 기반 투자 결정"}
+
+[채팅 규칙 - 반드시 지켜야 함]
+1. 특정 코인의 매수·매도를 단정적으로 권유하지 마 ("지금 사세요", "무조건 오릅니다" 등 금지)
+2. 수익을 보장하거나 확정적으로 예측하지 마
+3. 외부 채널(카카오톡, 텔레그램 등)이나 입금을 유도하지 마
+4. 대신 멘티가 스스로 판단할 수 있도록 질문하고, 리스크와 근거를 같이 생각하게 도와줘
+5. 반말보다는 존댓말을 사용하되, 친근한 코치 톤을 유지해
+6. 답변은 3~5문장으로 간결하게 해. 너무 길게 쓰지 마
+7. 코인·투자와 전혀 무관한 대화는 부드럽게 주제를 코칭으로 돌려줘
+
+지금 멘티가 보내는 메시지에 ${mentor_name} 멘토로서 답해줘.
+`.trim();
+
+  try {
+    const reply = await callClaudeChat(systemPrompt, trimmedMessages);
+
+    res.status(200).json({ success: true, reply });
+  } catch (error) {
+    console.error("chatWithMentor 오류:", error);
+    res.status(500).json({ success: false, error: "멘토 응답 생성에 실패했습니다." });
   }
 });

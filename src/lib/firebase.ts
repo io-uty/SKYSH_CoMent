@@ -79,6 +79,40 @@ export async function saveOnboardingResult(payload: OnboardingPayload): Promise<
   );
 }
 
+// ─── 멘토 채팅 API 호출 ──────────────────────────────────────────────────────
+const FUNCTIONS_BASE_URL = import.meta.env.VITE_FUNCTIONS_BASE_URL as string | undefined;
+
+export type ChatMessage = { role: "user" | "assistant"; content: string };
+
+export type MentorChatPayload = {
+  mentor_id: string;
+  mentor_name: string;
+  mentor_style: string;
+  mentor_specialty: string;
+  mentor_philosophy: string;
+  messages: ChatMessage[];
+};
+
+export async function callMentorChat(payload: MentorChatPayload): Promise<string> {
+  if (!FUNCTIONS_BASE_URL) {
+    throw new Error("VITE_FUNCTIONS_BASE_URL 환경변수가 설정되지 않았습니다.");
+  }
+
+  const response = await fetch(`${FUNCTIONS_BASE_URL}/chatWithMentor`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  const data = (await response.json()) as { success: boolean; reply?: string; error?: string };
+
+  if (!data.success || !data.reply) {
+    throw new Error(data.error ?? "멘토 응답을 받지 못했습니다.");
+  }
+
+  return data.reply;
+}
+
 // ─── 컬렉션 실시간 구독 ───────────────────────────────────────────────────────
 export function subscribeToCollection<T extends { id: string }>(
   collectionName: string,
