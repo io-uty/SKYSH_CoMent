@@ -100,7 +100,6 @@ button {
 .modal-title span,
 .portfolio-note span,
 .portfolio-stats-grid span,
-.portfolio-chart span,
 .chat-title span,
 .chat-entry-card span,
 .profile-label {
@@ -781,9 +780,9 @@ h1 {
 .candle-chart {
   position: absolute;
   right: 70px;
-  bottom: 30px;
+  bottom: 104px;
   left: 28px;
-  height: 330px;
+  height: 286px;
 }
 
 .candle {
@@ -812,6 +811,155 @@ h1 {
 .candle.down {
   color: #f04f64;
   background: #f04f64;
+}
+
+.candle.matched {
+  z-index: 4;
+  outline: 2px solid rgba(15, 85, 182, 0.22);
+  box-shadow: 0 0 0 6px rgba(15, 124, 255, 0.08);
+}
+
+.chart-hover-line {
+  position: absolute;
+  top: -20px;
+  bottom: -86px;
+  z-index: 3;
+  width: 1px;
+  background: rgba(36, 48, 66, 0.34);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.volume-chart {
+  position: absolute;
+  right: 70px;
+  bottom: 18px;
+  left: 28px;
+  height: 66px;
+}
+
+.volume-chart span {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 4;
+  padding: 2px 6px;
+  border: 1px solid #e3eaf3;
+  border-radius: 4px;
+  color: #8a97a8;
+  background: rgba(255, 255, 255, 0.88);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.volume-bars {
+  position: relative;
+  height: 58px;
+  border-top: 1px solid #e3eaf3;
+}
+
+.volume-hover-line {
+  position: absolute;
+  top: -298px;
+  bottom: 0;
+  z-index: 2;
+  width: 1px;
+  background: rgba(36, 48, 66, 0.34);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.volume-bars i {
+  position: absolute;
+  bottom: 0;
+  width: 10px;
+  min-height: 3px;
+  border-radius: 2px 2px 0 0;
+  opacity: 0.52;
+  transform: translateX(-50%);
+}
+
+.volume-bars .up {
+  background: #0f7cff;
+}
+
+.volume-bars .down {
+  background: #f04f64;
+}
+
+.volume-bars i.matched {
+  z-index: 3;
+  opacity: 0.9;
+  box-shadow: 0 0 0 4px rgba(15, 124, 255, 0.08);
+}
+
+.chart-hover-tooltip {
+  position: absolute;
+  top: 18px;
+  z-index: 8;
+  width: 250px;
+  padding: 12px;
+  border: 1px solid #c9d8eb;
+  border-radius: 8px;
+  color: #243042;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 18px 42px rgba(22, 46, 82, 0.18);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.chart-hover-tooltip.align-left {
+  transform: translateX(0);
+}
+
+.chart-hover-tooltip.align-right {
+  transform: translateX(-100%);
+}
+
+.chart-hover-tooltip > span {
+  color: #0f55b6;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.chart-hover-tooltip > strong {
+  display: block;
+  margin-top: 6px;
+  color: #182233;
+  font-size: 18px;
+}
+
+.chart-hover-tooltip dl {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px 12px;
+  margin: 10px 0 0;
+}
+
+.chart-hover-tooltip div {
+  display: grid;
+  gap: 2px;
+}
+
+.chart-hover-tooltip dt {
+  color: #8a97a8;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.chart-hover-tooltip dd {
+  margin: 0;
+  color: #3b4658;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.chart-hover-tooltip .profit {
+  color: #f04f64;
+}
+
+.chart-hover-tooltip .loss {
+  color: #247cff;
 }
 
 .replay-card,
@@ -1233,10 +1381,8 @@ h1 {
 }
 
 .portfolio-chart {
-  display: grid;
-  grid-template-rows: minmax(180px, 1fr) auto;
   min-height: 260px;
-  padding: 18px;
+  padding: 16px;
   background:
     linear-gradient(#edf3fb 1px, transparent 1px),
     linear-gradient(90deg, #edf3fb 1px, transparent 1px),
@@ -1244,29 +1390,114 @@ h1 {
   background-size: 64px 46px;
 }
 
-.portfolio-chart-line {
-  display: flex;
-  align-items: flex-end;
-  gap: 11px;
-  height: 100%;
-  padding: 18px 12px 10px;
+.portfolio-coin-chart {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  gap: 12px;
+  min-height: 230px;
 }
 
-.portfolio-chart-line i {
-  flex: 1;
-  min-width: 14px;
-  border-radius: 4px 4px 0 0;
+.portfolio-coin-bars {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+  min-height: 172px;
+  padding: 10px 2px 0;
+}
+
+.portfolio-coin-bars::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: #cbd8e8;
+}
+
+.portfolio-coin-item {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-rows: 124px auto;
+  gap: 8px;
+  min-width: 0;
+}
+
+.coin-bar-track {
+  display: grid;
+  grid-template-rows: 1fr 1fr;
+  justify-items: center;
+}
+
+.coin-bar-track i {
+  width: min(34px, 80%);
+  min-height: 7px;
+  border-radius: 5px;
+}
+
+.coin-bar-track .positive {
+  align-self: end;
+  grid-row: 1;
   background: #0f7cff;
-  box-shadow: 0 -12px 0 rgba(15, 124, 255, 0.12);
+  box-shadow: 0 -10px 0 rgba(15, 124, 255, 0.1);
 }
 
-.portfolio-chart-line i:nth-child(3n) {
+.coin-bar-track .negative {
+  align-self: start;
+  grid-row: 2;
   background: #f04f64;
-  box-shadow: 0 -12px 0 rgba(240, 79, 100, 0.12);
+  box-shadow: 0 10px 0 rgba(240, 79, 100, 0.1);
 }
 
-.portfolio-chart span {
+.coin-return-label {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  text-align: center;
+}
+
+.coin-return-label strong {
+  color: #243042;
+  font-size: 13px;
+}
+
+.coin-return-label small {
+  color: #8a97a8;
+  font-size: 10px;
+}
+
+.coin-return-label span {
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.coin-return-label .profit {
+  color: #0f7cff;
+}
+
+.coin-return-label .loss {
+  color: #f04f64;
+}
+
+.portfolio-chart-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #d9e3ef;
+}
+
+.portfolio-chart-summary span {
   color: #657386;
+  font-weight: 800;
+}
+
+.portfolio-chart-summary strong {
+  color: #0f55b6;
+  font-size: 16px;
 }
 
 .portfolio-stats-grid {
@@ -1538,6 +1769,14 @@ h1 {
     padding: 18px;
   }
 
+  .portfolio-coin-bars {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .portfolio-coin-item {
+    grid-template-rows: 108px auto;
+  }
+
   .mentor-list-row {
     grid-template-columns: 38px minmax(0, 1fr) 62px;
   }
@@ -1608,6 +1847,20 @@ h1 {
 
   .chart-stage {
     height: 560px;
+  }
+
+  .candle-chart,
+  .volume-chart {
+    right: 18px;
+    left: 18px;
+  }
+
+  .candle-chart {
+    height: 390px;
+  }
+
+  .volume-chart {
+    height: 66px;
   }
 
   .chart-insight-strip {
