@@ -1,12 +1,16 @@
 import { getApp, getApps, initializeApp, type FirebaseApp } from "firebase/app";
 import {
   collection,
+  doc,
   getFirestore,
   onSnapshot,
+  serverTimestamp,
+  setDoc,
   type DocumentData,
   type Firestore,
   type QueryDocumentSnapshot,
 } from "firebase/firestore";
+import type { MentorPattern } from "../types";
 
 const env = import.meta.env;
 
@@ -34,6 +38,48 @@ export const firestore: Firestore | null = firebaseApp
   ? getFirestore(firebaseApp)
   : null;
 
+// ─── 세션 유저 ID (로그인 없이 브라우저당 고유 ID 생성) ──────────────────────
+export function getSessionUserId(): string {
+  const KEY = "coment_uid";
+  let uid = localStorage.getItem(KEY);
+  if (!uid) {
+    uid = crypto.randomUUID();
+    localStorage.setItem(KEY, uid);
+  }
+  return uid;
+}
+
+// ─── 온보딩 결과 저장 ─────────────────────────────────────────────────────────
+export type OnboardingPayload = {
+  userId: string;
+  pattern: MentorPattern;
+  investorType: string;      // "수비적인 투자자" | "중립적인 투자자" | "공격적인 투자자"
+  scores: number[];
+  answers: string[];
+  matchedMentorId: string;
+};
+
+export async function saveOnboardingResult(payload: OnboardingPayload): Promise<void> {
+  if (!firestore) {
+    console.warn("Firestore 미연결 — 온보딩 결과를 로컬에만 유지합니다.");
+    return;
+  }
+
+  await setDoc(
+    doc(firestore, "users", payload.userId),
+    {
+      pattern: payload.pattern,
+      investor_type: payload.investorType,
+      scores: payload.scores,
+      answers: payload.answers,
+      matched_mentor_id: payload.matchedMentorId,
+      onboarded_at: serverTimestamp(),
+    },
+    { merge: true },
+  );
+}
+
+// ─── 컬렉션 실시간 구독 ───────────────────────────────────────────────────────
 export function subscribeToCollection<T extends { id: string }>(
   collectionName: string,
   fallback: T[],
