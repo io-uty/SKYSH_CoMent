@@ -80,7 +80,6 @@ button {
 .brand-panel span,
 .app-title span,
 .rail-title span,
-.emotion-card span,
 .replay-card span,
 .advocate-box span,
 .guard-card span,
@@ -472,38 +471,12 @@ h1 {
   background: #f04f64;
 }
 
-.emotion-card,
 .replay-card,
 .advocate-box,
 .fomo-banner {
   border-radius: 8px;
 }
 
-.emotion-card {
-  position: absolute;
-  top: 86px;
-  right: 38px;
-  width: 330px;
-  padding: 22px;
-  border: 2px solid #0f7cff;
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 18px 40px rgba(31, 70, 120, 0.12);
-}
-
-.emotion-card strong {
-  display: block;
-  margin: 14px 0 4px;
-  color: #0f7cff;
-  font-size: 34px;
-  font-weight: 500;
-}
-
-.emotion-card p {
-  margin-bottom: 14px;
-  color: #405066;
-}
-
-.emotion-card button,
 .advocate-box button {
   height: 34px;
   border: 0;
@@ -512,10 +485,6 @@ h1 {
   background: #0f7cff;
   font-weight: 800;
   cursor: pointer;
-}
-
-.emotion-card button {
-  width: 150px;
 }
 
 .replay-card {
@@ -836,13 +805,6 @@ h1 {
     height: 560px;
   }
 
-  .emotion-card {
-    top: 70px;
-    right: 14px;
-    left: 14px;
-    width: auto;
-  }
-
   .replay-card {
     right: 14px;
     left: 14px;
@@ -856,7 +818,7 @@ h1 {
     left: 0;
     z-index: 20;
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     border-top: 1px solid #d8e0eb;
     background: #ffffff;
   }
