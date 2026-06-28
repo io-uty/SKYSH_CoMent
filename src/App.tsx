@@ -62,12 +62,19 @@ type UpbitCandle = {
 
 type ChartCandle = {
   id: string;
+  timeLabel: string;
+  open: number;
+  high: number;
+  low: number;
   bodyBottom: number;
   bodyHeight: number;
   wickTop: number;
   wickBottom: number;
   direction: "up" | "down";
   close: number;
+  changeRate: number;
+  volume: number;
+  volumeHeight: number;
 };
 
 const fallbackTicker: UpbitTicker = {
@@ -93,25 +100,55 @@ const fallbackCandles: UpbitCandle[] = fallbackChartBars.map((height, index) => 
   };
 });
 
+function formatCandleDateTime(value: string) {
+  if (value.startsWith("seed-")) {
+    return `Seed ${value.replace("seed-", "")}`;
+  }
+
+  const [datePart, rawTimePart = ""] = value.split("T");
+  const [, month = "", day = ""] = datePart.split("-");
+  const [hour = "00", minute = "00", second = "00"] = rawTimePart
+    .replace("Z", "")
+    .split(/[+.]/)[0]
+    .split(":");
+
+  return `${month}/${day} ${hour}:${minute}${second !== "00" ? `:${second}` : ""}`;
+}
+
 function toChartCandles(candles: UpbitCandle[]) {
   const orderedCandles = [...candles].reverse();
   const minLow = Math.min(...orderedCandles.map((candle) => candle.low_price));
   const maxHigh = Math.max(...orderedCandles.map((candle) => candle.high_price));
   const priceRange = Math.max(maxHigh - minLow, 1);
+  const maxVolume = Math.max(...orderedCandles.map((candle) => candle.candle_acc_trade_volume), 1);
 
   return orderedCandles.map((candle) => {
     const bodyHigh = Math.max(candle.opening_price, candle.trade_price);
     const bodyLow = Math.min(candle.opening_price, candle.trade_price);
     const rawBodyHeight = ((bodyHigh - bodyLow) / priceRange) * 100;
+    const volumeHeight =
+      candle.candle_acc_trade_volume > 0
+        ? Math.max((candle.candle_acc_trade_volume / maxVolume) * 100, 6)
+        : 0;
 
     return {
       id: candle.candle_date_time_kst,
+      timeLabel: formatCandleDateTime(candle.candle_date_time_kst),
+      open: candle.opening_price,
+      high: candle.high_price,
+      low: candle.low_price,
       bodyBottom: ((bodyLow - minLow) / priceRange) * 100,
       bodyHeight: Math.max(rawBodyHeight, 2.4),
       wickTop: ((candle.high_price - bodyHigh) / priceRange) * 100,
       wickBottom: ((bodyLow - candle.low_price) / priceRange) * 100,
       direction: candle.trade_price >= candle.opening_price ? "up" : "down",
       close: candle.trade_price,
+      changeRate:
+        candle.opening_price === 0
+          ? 0
+          : ((candle.trade_price - candle.opening_price) / candle.opening_price) * 100,
+      volume: candle.candle_acc_trade_volume,
+      volumeHeight,
     } satisfies ChartCandle;
   });
 }
@@ -166,15 +203,15 @@ const subscriptionPlans = [
   {
     id: "basic",
     name: "베이직",
-    price: 79000,
+    price: 9900,
     cadence: "월",
     summary: "주 1회 코칭과 기본 리스크 코멘트",
-    features: ["주간 포트폴리오 점검", "멘토 코멘트 12회", "감정 리스크 요약"],
+    features: ["주간 포트폴리오 점검", "멘토 코멘트 12회" , "감정 리스크 요약"],
   },
   {
     id: "pro",
     name: "프로",
-    price: 129000,
+    price: 19000,
     cadence: "월",
     summary: "실시간 화면 공유 기반 코칭",
     features: ["멘토 코멘트 30회", "급등락 알림 우선", "매매 기록 피드백"],
@@ -182,7 +219,7 @@ const subscriptionPlans = [
   {
     id: "prime",
     name: "프라임",
-    price: 219000,
+    price: 49000,
     cadence: "월",
     summary: "고빈도 멘토링과 세부 전략 관리",
     features: ["1:1 심화 세션 2회", "관심 종목 리뷰", "월간 전략 리포트"],
@@ -197,6 +234,10 @@ function formatCurrency(value: number) {
 
 function percent(value: number) {
   return `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
+}
+
+function signedRate(value: number) {
+  return `${value > 0 ? "+" : ""}${value.toFixed(1)}%`;
 }
 
 function App() {
@@ -221,6 +262,7 @@ function App() {
   const [marketUpdatedAt, setMarketUpdatedAt] = useState("Seed data");
   const [isMarketFallback, setIsMarketFallback] = useState(true);
   const [activeTimeframe, setActiveTimeframe] = useState<MarketTimeframe>("30m");
+  const [hoveredCandleIndex, setHoveredCandleIndex] = useState<number | null>(null);
 
   const activeTimeframeConfig =
     marketTimeframes.find((timeframe) => timeframe.id === activeTimeframe) ?? marketTimeframes[1];
@@ -329,6 +371,19 @@ function App() {
   const mirrorAlert = alerts.find((alert) => alert.id === "mirror") ?? alerts[0];
   const fomoAlert = alerts.find((alert) => alert.id === "fomo") ?? alerts[0];
   const patternProfile = patternProfiles[menteePattern];
+  const hoveredCandle =
+    hoveredCandleIndex === null ? null : chartCandles[hoveredCandleIndex] ?? null;
+  const hoveredCandleLeft =
+    hoveredCandleIndex !== null && chartCandles.length > 1
+      ? (hoveredCandleIndex / (chartCandles.length - 1)) * 100
+      : 50;
+  const hoverTooltipPlacement =
+    hoveredCandleLeft > 72 ? " align-right" : hoveredCandleLeft < 22 ? " align-left" : "";
+  const portfolioCoinReturnMax = portfolioMentor
+    ? Math.max(...portfolioMentor.coinReturns.map((coin) => Math.abs(coin.returnRate)), 1)
+    : 1;
+  const portfolioCoinReturnTotal =
+    portfolioMentor?.coinReturns.reduce((total, coin) => total + coin.returnRate, 0) ?? 0;
 
   const viewCopy = {
     match: {
@@ -661,8 +716,8 @@ function App() {
 
                 <article className="mini-card">
                   <span>감정 상태</span>
-                  <strong>공포 82%</strong>
-                  <p>급락 후 매도 시도 감지</p>
+                  <strong>안정 52%</strong>
+                  <p>급락 후 매도 시도 없음</p>
                 </article>
               </section>
 
@@ -678,7 +733,10 @@ function App() {
                       <button
                         className={activeTimeframe === timeframe.id ? "active" : ""}
                         key={timeframe.id}
-                        onClick={() => setActiveTimeframe(timeframe.id)}
+                        onClick={() => {
+                          setActiveTimeframe(timeframe.id);
+                          setHoveredCandleIndex(null);
+                        }}
                       >
                         {timeframe.label}
                       </button>
@@ -690,16 +748,27 @@ function App() {
                   </span>
                 </div>
 
-                <div className="chart-stage">
+                <div className="chart-stage" onMouseLeave={() => setHoveredCandleIndex(null)}>
                   <div className="grid-lines" />
                   <div
                     className="candle-chart"
                     aria-label={`비트코인 ${activeTimeframeConfig.candleLabel} 캔들 차트`}
                   >
+                    {hoveredCandle ? (
+                      <span
+                        className="chart-hover-line"
+                        style={{ left: `${hoveredCandleLeft}%` }}
+                      />
+                    ) : null}
                     {chartCandles.map((candle, index) => (
                       <span
-                        className={`candle ${candle.direction}`}
+                        className={`candle ${candle.direction}${
+                          hoveredCandleIndex === index ? " matched" : ""
+                        }`}
                         key={`${candle.id}-${index}`}
+                        onMouseEnter={() => setHoveredCandleIndex(index)}
+                        onMouseMove={() => setHoveredCandleIndex(index)}
+                        onMouseOver={() => setHoveredCandleIndex(index)}
                         style={
                           {
                             "--wick-bottom": `${candle.wickBottom}%`,
@@ -713,10 +782,82 @@ function App() {
                             }%`,
                           } as CSSProperties
                         }
-                        title={`${formatCurrency(Math.round(candle.close))} KRW`}
+                        title={`${candle.timeLabel} 종가 ${formatCurrency(
+                          Math.round(candle.close),
+                        )} KRW · 거래량 ${candle.volume.toFixed(4)} BTC`}
                       />
                     ))}
                   </div>
+                  <div className="volume-chart" aria-label={`${activeTimeframeConfig.candleLabel} 거래량`}>
+                    <span>거래량</span>
+                    <div className="volume-bars">
+                      {hoveredCandle ? (
+                        <span
+                          className="volume-hover-line"
+                          style={{ left: `${hoveredCandleLeft}%` }}
+                        />
+                      ) : null}
+                      {chartCandles.map((candle, index) => (
+                        <i
+                          className={`${candle.direction}${
+                            hoveredCandleIndex === index ? " matched" : ""
+                          }`}
+                          key={`${candle.id}-volume-${index}`}
+                          onMouseEnter={() => setHoveredCandleIndex(index)}
+                          onMouseMove={() => setHoveredCandleIndex(index)}
+                          onMouseOver={() => setHoveredCandleIndex(index)}
+                          style={
+                            {
+                              height: `${candle.volumeHeight}%`,
+                              left: `${
+                                chartCandles.length > 1
+                                  ? (index / (chartCandles.length - 1)) * 100
+                                  : 50
+                              }%`,
+                            } as CSSProperties
+                          }
+                          title={`거래량 ${candle.volume.toFixed(4)} BTC`}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                  {hoveredCandle ? (
+                    <div
+                      className={`chart-hover-tooltip${hoverTooltipPlacement}`}
+                      style={{ left: `${hoveredCandleLeft}%` }}
+                    >
+                      <span>{hoveredCandle.timeLabel}</span>
+                      <strong>{formatCurrency(Math.round(hoveredCandle.close))} KRW</strong>
+                      <dl>
+                        <div>
+                          <dt>시가</dt>
+                          <dd>{formatCurrency(Math.round(hoveredCandle.open))}</dd>
+                        </div>
+                        <div>
+                          <dt>고가</dt>
+                          <dd>{formatCurrency(Math.round(hoveredCandle.high))}</dd>
+                        </div>
+                        <div>
+                          <dt>저가</dt>
+                          <dd>{formatCurrency(Math.round(hoveredCandle.low))}</dd>
+                        </div>
+                        <div>
+                          <dt>종가</dt>
+                          <dd>{formatCurrency(Math.round(hoveredCandle.close))}</dd>
+                        </div>
+                        <div>
+                          <dt>등락</dt>
+                          <dd className={hoveredCandle.changeRate >= 0 ? "profit" : "loss"}>
+                            {percent(hoveredCandle.changeRate)}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>거래량</dt>
+                          <dd>{hoveredCandle.volume.toFixed(4)} BTC</dd>
+                        </div>
+                      </dl>
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="chart-insight-strip">
@@ -893,18 +1034,40 @@ function App() {
                 </div>
               </section>
 
-              <section className="portfolio-chart" aria-label={`${portfolioMentor.name} 멘토 수익 곡선`}>
-                <div className="portfolio-chart-line">
-                  <i style={{ height: "30%" }} />
-                  <i style={{ height: "42%" }} />
-                  <i style={{ height: "38%" }} />
-                  <i style={{ height: "55%" }} />
-                  <i style={{ height: "62%" }} />
-                  <i style={{ height: "58%" }} />
-                  <i style={{ height: "74%" }} />
-                  <i style={{ height: "82%" }} />
+              <section
+                className="portfolio-chart"
+                aria-label={`${portfolioMentor.name} 멘토 우량 코인별 수익률`}
+              >
+                <div className="portfolio-coin-chart">
+                  <div className="portfolio-coin-bars">
+                    {portfolioMentor.coinReturns.map((coin) => (
+                      <div className="portfolio-coin-item" key={coin.symbol} title={coin.name}>
+                        <div className="coin-bar-track">
+                          <i
+                            className={coin.returnRate >= 0 ? "positive" : "negative"}
+                            style={{
+                              height: `${Math.max(
+                                (Math.abs(coin.returnRate) / portfolioCoinReturnMax) * 100,
+                                8,
+                              )}%`,
+                            }}
+                          />
+                        </div>
+                        <div className="coin-return-label">
+                          <strong>{coin.symbol}</strong>
+                          <small>{coin.name}</small>
+                          <span className={coin.returnRate >= 0 ? "profit" : "loss"}>
+                            {signedRate(coin.returnRate)}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="portfolio-chart-summary">
+                    <span>우량 코인별 6개월 검증 수익률</span>
+                    <strong>합산 {signedRate(portfolioCoinReturnTotal)}</strong>
+                  </div>
                 </div>
-                <span>최근 6개월 검증 추이</span>
               </section>
             </div>
 
@@ -922,8 +1085,8 @@ function App() {
                 <strong>{portfolioMentor.rating.toFixed(1)}</strong>
               </article>
               <article>
-                <span>멘티 수</span>
-                <strong>{portfolioMentor.menteeCount}명</strong>
+                <span>1시간 내 응답률</span>
+                <strong>{portfolioMentor.responseRate}%</strong>
               </article>
             </div>
 
