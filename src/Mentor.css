@@ -1,0 +1,45 @@
+.chat-row {
+  display: grid;
+}
+
+.chat-row.left {
+  justify-items: start;
+}
+
+.chat-row.right {
+  justify-items: end;
+}
+
+.chat-bubble.mentor {
+  justify-self: end;
+  border-color: #0f7cff;
+  color: #ffffff;
+  background: #0f7cff;
+}
+
+.chat-bubble.mentee {
+  justify-self: start;
+  border-color: #dce5f0;
+  color: #243042;
+  background: #ffffff;
+}
+
+.mentor-composer {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.mentor-composer textarea {
+  min-width: 0;
+  min-height: 58px;
+  padding: 11px 12px;
+  border: 1px solid #d8e0eb;
+  border-radius: 8px;
+  color: #243042;
+  font: inherit;
+  resize: none;
+}
+
+.mentor-composer textarea:focus {
+  border-color: #0f7cff;
+  outline: 0;
+}

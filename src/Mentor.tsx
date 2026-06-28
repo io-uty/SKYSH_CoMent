@@ -16,77 +16,121 @@ export default function Mentor() {
     {
       id: 1,
       author: "mentee",
-      body: "멘토님, 지금 비트코인 갑자기 3% 넘게 빠지는데 시장가로 던질까요?",
-      time: "오전 10:33",
+      body: "현재 재 코인이 더 떨어질거같은데 손절할까요? 차라리 지금 비트코인 손실 난 걸 다른 코인으로 갈아타서 빠르게 메꾸는 건 어떨까요?",
+      time: "09:15",
     },
     {
       id: 2,
-      author: "system",
-      body: "현재 급락은 단기 변동성 확대 구간으로 파악됩니다. 손절선(8,800만 원) 이탈 여부를 확인하는 신중한 접근이 필요합니다.",
-      time: "오전 10:35",
+      author: "mentor",
+      body: "현재 시장 변동성이 큽니다. 너무 감정적으로 대응하지 마세요. 급락장에서 타 종목으로 추격 매수를 진행하는 것은 2차 손실로 이어질 확률이 매우 높습니다. 멘티님의 'Emotion Replay' 타임라인을 보면, 과거에도 급락 후 평균 5분안에 뇌동매매를 하고 손실을 본 패턴이 있습니다. 신규 진입을 보류하고 30분봉 차트가 안정될 때까지 관망하시길 권장합니다.",
+      time: "09:20",
       status: "approved",
-    }
+    },
+    {
+      id: 3,
+      author: "mentee",
+      body: "하지만 계좌 상황이 너무 안좋아서 불안해요...",
+      time: "09:22",
+    },
   ]);
 
- const handleRefine = async () => {
-    if (!rawInput.trim() || isRefining) return;
+  const handleRefine = async () => {
+    const trimmedInput = rawInput.trim();
+
+    if (!trimmedInput || isRefining) return;
+
     setIsRefining(true);
 
-    const now = new Date();
-    const currentTime = now.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+    const currentTime = new Date().toLocaleTimeString("ko-KR", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
 
-    // 1. 시연용: 거절 키워드 정의
-    const rejectedKeywords = ["무조건", "영끌", "풀매수", "100% 보장", "리딩방"];
-    const isRejected = rejectedKeywords.some(keyword => rawInput.includes(keyword));
+    const rejectedKeywords = ["무조건", "영끌", "풀매수"];
+    const isRejected = rejectedKeywords.some((keyword) => trimmedInput.includes(keyword));
 
-    // 2. AI 분석 시뮬레이션
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    
-    // 3. 메시지 생성 로직 (입력값 그대로 출력)
-    const newMsg: Message = {
-      id: Date.now(),
-      author: "system",
-      time: currentTime,
-      status: isRejected ? "rejected" : "approved",
-      body: isRejected 
-        ? "[거절됨] 사유: 주관적인 선동 문구(무조건, 풀매수 등)가 포함되어 있습니다." 
-        : `${rawInput}` // 입력한 내용을 그대로 출력
-    };
+    if (isRejected) {
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now(),
+          author: "system",
+          time: currentTime,
+          status: "rejected",
+          body: "[차단됨] 선동 문구가 포함되어 있어 전송이 차단되었습니다.",
+        },
+      ]);
+    } else {
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now(),
+          author: "mentor",
+          time: currentTime,
+          status: "approved",
+          body: trimmedInput,
+        },
+      ]);
+    }
 
-    setChatMessages((prev) => [...prev, newMsg]);
-    setRawInput(""); // 입력창 초기화
+    setRawInput("");
     setIsRefining(false);
   };
+
   return (
-    <div style={{ width: "100%", maxWidth: "500px", height: "100vh", margin: "0 auto", display: "flex", flexDirection: "column", background: "#f4f7f6", fontFamily: "sans-serif" }}>
-      {/* 헤더 수정 완료 */}
-      <div style={{ padding: "16px", background: "#fff", borderBottom: "1px solid #eee" }}>
-        <span style={{ fontSize: "11px", color: "#4285f4", fontWeight: "bold" }}>MENTOR-MENTEE CHAT</span>
-        <h2 style={{ margin: "4px 0", fontSize: "16px", fontWeight: "bold" }}>윤서연 멘토와 1:1 코칭방</h2>
-        <span style={{ fontSize: "11px", color: "#999" }}>프로 구독 • 실시간 코멘트 연결</span>
-      </div>
-
-      <div style={{ flex: 1, padding: "20px", overflowY: "auto" }}>
-        {chatMessages.map((msg) => (
-          <div key={msg.id} style={{ display: "flex", justifyContent: msg.author === "mentee" ? "flex-end" : "flex-start", marginBottom: "15px" }}>
-            {msg.author !== "mentee" && (
-              <div style={{ width: "36px", height: "36px", borderRadius: "50%", background: msg.status === "rejected" ? "#f44336" : "#4caf50", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", marginRight: "8px" }}>
-                {msg.author === "system" ? "AI" : "멘"}
-              </div>
-            )}
-            <div style={{ padding: "10px", borderRadius: "10px", backgroundColor: msg.author === "mentee" ? "#4285f4" : "#fff", color: msg.author === "mentee" ? "#fff" : "#333", maxWidth: "70%", border: msg.status === "rejected" ? "2px solid #f44336" : "none" }}>
-              {msg.body}
-            </div>
+    <section className="chat-modal" role="dialog" aria-label="윤서연 멘토와 1:1 코칭방">
+      <div className="chat-title">
+        <div className="matched-mentor-head">
+          <span className="mentor-avatar large">윤</span>
+          <div>
+            <span>Mentor-Mentee Chat</span>
+            <h2>윤서연 멘토와 1:1 코칭방</h2>
+            <p>멘토 화면 · AI AGENT 문구 검토 연결</p>
           </div>
-        ))}
+        </div>
       </div>
 
-      <div style={{ padding: "16px", background: "#fff", display: "flex", gap: "10px" }}>
-        <textarea style={{ flex: 1, height: "50px", padding: "10px" }} value={rawInput} onChange={(e) => setRawInput(e.target.value)} placeholder="조언 입력..." />
-        <button onClick={handleRefine} disabled={isRefining} style={{ padding: "0 20px", background: "#4285f4", color: "#fff", border: "none", borderRadius: "8px" }}>
-          {isRefining ? "분석중" : "전송"}
+      <div className="chat-thread">
+        {chatMessages.map((message) => {
+          const isMentorSide = message.author === "mentor" || message.author === "system";
+
+          // 핵심 해결 로직: 팀원의 CSS가 멘티 기준이므로, 클래스 이름을 의도적으로 반전시킵니다.
+          // 멘토가 입력한 글은 CSS의 'mentee' 스타일(우측/파란색)을 적용받게 합니다.
+          const rowClass = isMentorSide ? "right" : "left";
+          const bubbleClass = isMentorSide ? "mentee" : "mentor";
+
+          return (
+            <div
+              className={`chat-row ${rowClass}`}
+              key={message.id}
+            >
+              {message.status === "rejected" ? (
+                <div className="chat-guardrail">
+                  <strong>경고</strong>
+                  {message.body}
+                  <span>{message.time}</span>
+                </div>
+              ) : (
+                <div className={`chat-bubble ${bubbleClass}`}>
+                  <p>{message.body}</p>
+                  <span>{message.time}</span>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="chat-composer mentor-composer">
+        <textarea
+          value={rawInput}
+          onChange={(event) => setRawInput(event.target.value)}
+          placeholder="멘티에게 보낼 코멘트를 입력하세요"
+        />
+        <button className="solid-button" onClick={handleRefine} disabled={isRefining}>
+          {isRefining ? "검토 중" : "전송"}
         </button>
       </div>
-    </div>
+    </section>
   );
 }
