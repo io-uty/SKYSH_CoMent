@@ -74,10 +74,10 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
     let investorType = "";
     let pattern: MentorPattern = "neutral";
 
-    if (totalScore <= 18) {
+    if (totalScore <= 23) {
       investorType = "수비적인 투자자";
       pattern = "defensive";
-    } else if (totalScore <= 28) {
+    } else if (totalScore <= 33) {
       investorType = "중립적인 투자자";
       pattern = "neutral";
     } else {

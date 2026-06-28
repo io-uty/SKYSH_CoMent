@@ -1,5 +1,11 @@
 export type MentorPattern = "aggressive" | "neutral" | "defensive";
 
+export type MentorCoinReturn = {
+  symbol: string;
+  name: string;
+  returnRate: number;
+};
+
 export type Mentor = {
   id: string;
   name: string;
@@ -11,11 +17,12 @@ export type Mentor = {
   verifiedReturn: number;
   drawdown: number;
   rating: number;
-  menteeCount: number;
+  responseRate: number;
   matchScore: number;
   monthlyPrice: number;
   badge: string;
   tags: string[];
+  coinReturns: MentorCoinReturn[];
   accent: string;
 };
 

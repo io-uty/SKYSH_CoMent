@@ -1,7 +1,18 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import Onboarding, { type OnboardingResult } from "./Onboarding";
 import { seedAlerts, seedMentors, seedSignals } from "./data/seed";
-import { firestore, subscribeToCollection } from "./lib/firebase";
+import {
+  appendChatMessage,
+  buildChatId,
+  callMentorChat,
+  firestore,
+  getSessionUserId,
+  saveOnboardingResult,
+  seedChatIfEmpty,
+  subscribeToChatMessages,
+  subscribeToCollection,
+  type ChatMessage as ApiChatMessage,
+} from "./lib/firebase";
 import type { CoachingAlert, MarketSignal, Mentor, MentorPattern } from "./types";
 
 const fallbackChartBars = [
@@ -9,7 +20,15 @@ const fallbackChartBars = [
 ];
 
 const upbitTickerEndpoint = "https://api.upbit.com/v1/ticker?markets=KRW-BTC";
+const upbitHistoricalCandlesEndpoint =
+  import.meta.env.VITE_UPBIT_HISTORICAL_CANDLES_ENDPOINT ?? "/api/upbitHistoricalCandles";
 const marketRefreshMs = 10000;
+const visibleCandleCount = 72;
+const defaultInvestmentPrinciples = [
+  "감정적인 투자 금지",
+  "끝까지 가면 내가 다 이김",
+  "위의 2가지를 지킬 것",
+];
 const marketTimeframes = [
   {
     id: "1m",
@@ -62,13 +81,29 @@ type UpbitCandle = {
 
 type ChartCandle = {
   id: string;
+  timeLabel: string;
+  open: number;
+  high: number;
+  low: number;
   bodyBottom: number;
   bodyHeight: number;
   wickTop: number;
   wickBottom: number;
   direction: "up" | "down";
   close: number;
+  changeRate: number;
+  volume: number;
+  volumeHeight: number;
 };
+
+type HistoricalCandlesResponse = {
+  success: boolean;
+  timeframe: MarketTimeframe;
+  files: string[];
+  candles: UpbitCandle[];
+};
+
+const emptyHistoricalCandles: UpbitCandle[] = [];
 
 const fallbackTicker: UpbitTicker = {
   trade_price: 91875000,
@@ -93,25 +128,85 @@ const fallbackCandles: UpbitCandle[] = fallbackChartBars.map((height, index) => 
   };
 });
 
+function formatCandleDateTime(value: string) {
+  if (value.startsWith("seed-")) {
+    return `Seed ${value.replace("seed-", "")}`;
+  }
+
+  const [datePart, rawTimePart = ""] = value.split("T");
+  const [, month = "", day = ""] = datePart.split("-");
+  const [hour = "00", minute = "00", second = "00"] = rawTimePart
+    .replace("Z", "")
+    .split(/[+.]/)[0]
+    .split(":");
+
+  return `${month}/${day} ${hour}:${minute}${second !== "00" ? `:${second}` : ""}`;
+}
+
+function candleTimeValue(candle: Pick<UpbitCandle, "candle_date_time_kst">) {
+  if (candle.candle_date_time_kst.startsWith("seed-")) {
+    return Number(candle.candle_date_time_kst.replace("seed-", ""));
+  }
+
+  const parsedTime = Date.parse(candle.candle_date_time_kst);
+  return Number.isNaN(parsedTime) ? 0 : parsedTime;
+}
+
+function mergeMarketCandles(historicalCandles: UpbitCandle[], liveCandles: UpbitCandle[]) {
+  const candlesByTime = new Map<number, UpbitCandle>();
+
+  for (const candle of historicalCandles) {
+    candlesByTime.set(candleTimeValue(candle), candle);
+  }
+
+  for (const candle of liveCandles) {
+    candlesByTime.set(candleTimeValue(candle), candle);
+  }
+
+  return [...candlesByTime.entries()]
+    .sort(([leftTime], [rightTime]) => leftTime - rightTime)
+    .map(([, candle]) => candle);
+}
+
 function toChartCandles(candles: UpbitCandle[]) {
-  const orderedCandles = [...candles].reverse();
+  const orderedCandles = [...candles].sort((left, right) => candleTimeValue(left) - candleTimeValue(right));
+
+  if (orderedCandles.length === 0) {
+    return [];
+  }
+
   const minLow = Math.min(...orderedCandles.map((candle) => candle.low_price));
   const maxHigh = Math.max(...orderedCandles.map((candle) => candle.high_price));
   const priceRange = Math.max(maxHigh - minLow, 1);
+  const maxVolume = Math.max(...orderedCandles.map((candle) => candle.candle_acc_trade_volume), 1);
 
   return orderedCandles.map((candle) => {
     const bodyHigh = Math.max(candle.opening_price, candle.trade_price);
     const bodyLow = Math.min(candle.opening_price, candle.trade_price);
     const rawBodyHeight = ((bodyHigh - bodyLow) / priceRange) * 100;
+    const volumeHeight =
+      candle.candle_acc_trade_volume > 0
+        ? Math.max((candle.candle_acc_trade_volume / maxVolume) * 100, 6)
+        : 0;
 
     return {
       id: candle.candle_date_time_kst,
+      timeLabel: formatCandleDateTime(candle.candle_date_time_kst),
+      open: candle.opening_price,
+      high: candle.high_price,
+      low: candle.low_price,
       bodyBottom: ((bodyLow - minLow) / priceRange) * 100,
       bodyHeight: Math.max(rawBodyHeight, 2.4),
       wickTop: ((candle.high_price - bodyHigh) / priceRange) * 100,
       wickBottom: ((bodyLow - candle.low_price) / priceRange) * 100,
       direction: candle.trade_price >= candle.opening_price ? "up" : "down",
       close: candle.trade_price,
+      changeRate:
+        candle.opening_price === 0
+          ? 0
+          : ((candle.trade_price - candle.opening_price) / candle.opening_price) * 100,
+      volume: candle.candle_acc_trade_volume,
+      volumeHeight,
     } satisfies ChartCandle;
   });
 }
@@ -130,6 +225,7 @@ type ChatMessage = {
   author: "mentor" | "mentee";
   body: string;
   time: string;
+  warning?: string;
 };
 
 const patternProfiles: Record<
@@ -166,15 +262,15 @@ const subscriptionPlans = [
   {
     id: "basic",
     name: "베이직",
-    price: 79000,
+    price: 9900,
     cadence: "월",
     summary: "주 1회 코칭과 기본 리스크 코멘트",
-    features: ["주간 포트폴리오 점검", "멘토 코멘트 12회", "감정 리스크 요약"],
+    features: ["주간 포트폴리오 점검", "멘토 코멘트 12회" , "감정 리스크 요약"],
   },
   {
     id: "pro",
     name: "프로",
-    price: 129000,
+    price: 19000,
     cadence: "월",
     summary: "실시간 화면 공유 기반 코칭",
     features: ["멘토 코멘트 30회", "급등락 알림 우선", "매매 기록 피드백"],
@@ -182,7 +278,7 @@ const subscriptionPlans = [
   {
     id: "prime",
     name: "프라임",
-    price: 219000,
+    price: 49000,
     cadence: "월",
     summary: "고빈도 멘토링과 세부 전략 관리",
     features: ["1:1 심화 세션 2회", "관심 종목 리뷰", "월간 전략 리포트"],
@@ -199,6 +295,10 @@ function percent(value: number) {
   return `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
 }
 
+function signedRate(value: number) {
+  return `${value > 0 ? "+" : ""}${value.toFixed(1)}%`;
+}
+
 function App() {
   const mentors = seedMentors;
   const [signals, setSignals] = useState<MarketSignal[]>(seedSignals);
@@ -208,11 +308,6 @@ function App() {
   const [selectedMentorId, setSelectedMentorId] = useState(
     seedMentors.find((mentor) => mentor.pattern === "neutral")?.id ?? seedMentors[0].id,
   );
-
-const [screenTime, setScreenTime] = useState(2); // 초기값 2
-const [searchCount, setSearchCount] = useState(5); // 초기값 5
-const [concentration, setConcentration] = useState(30); // 초기값 30
-const [buyStreak, setBuyStreak] = useState(0); // 초기값 0
   const [activeView, setActiveView] = useState<AppView>("match");
   const [portfolioMentor, setPortfolioMentor] = useState<Mentor | null>(null);
   const [pendingMentor, setPendingMentor] = useState<Mentor | null>(null);
@@ -221,31 +316,84 @@ const [buyStreak, setBuyStreak] = useState(0); // 초기값 0
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [chatDraft, setChatDraft] = useState("");
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [isMentorTyping, setIsMentorTyping] = useState(false);
   const [ticker, setTicker] = useState<UpbitTicker>(fallbackTicker);
   const [chartCandles, setChartCandles] = useState<ChartCandle[]>(fallbackChartCandles);
   const [marketUpdatedAt, setMarketUpdatedAt] = useState("Seed data");
   const [isMarketFallback, setIsMarketFallback] = useState(true);
   const [activeTimeframe, setActiveTimeframe] = useState<MarketTimeframe>("30m");
- const replayEvents = [
-  { time: "10:32", label: "급락 시작", type: "event" },
-  { time: "10:34", label: "뉴스 검색", type: "action" },
-  { time: "10:36", label: "공포 투매", type: "event" },
-  { time: "10:48", label: "반등 성공", type: "event" }
-];
-const riskIndex = useMemo(() => {
-    // 실제 앱 상태를 참조하도록 수정해야 합니다
-    const screenTimeScore = 2 * 10; 
-    const searchCountScore = 5 * 5; 
-    const concentrationScore = 30 * 0.5; 
-    const streakScore = 0 * 10; 
-    
-    return Math.min(100, screenTimeScore + searchCountScore + concentrationScore + streakScore);
-  }, [screenTime, searchCount, concentration, buyStreak]);
+  const [historicalCandlesByTimeframe, setHistoricalCandlesByTimeframe] = useState<
+    Partial<Record<MarketTimeframe, UpbitCandle[]>>
+  >({});
+  const [historicalSourceByTimeframe, setHistoricalSourceByTimeframe] = useState<
+    Partial<Record<MarketTimeframe, string>>
+  >({});
+  const [hoveredCandleIndex, setHoveredCandleIndex] = useState<number | null>(null);
+  const [investmentPrinciples, setInvestmentPrinciples] = useState(defaultInvestmentPrinciples);
+  const [principleDrafts, setPrincipleDrafts] = useState(defaultInvestmentPrinciples);
+  const [isEditingPrinciples, setIsEditingPrinciples] = useState(false);
+
   const activeTimeframeConfig =
     marketTimeframes.find((timeframe) => timeframe.id === activeTimeframe) ?? marketTimeframes[1];
+  const historicalCandlesForActiveTimeframe =
+    historicalCandlesByTimeframe[activeTimeframe] ?? emptyHistoricalCandles;
+  const historicalSourceLabel = historicalSourceByTimeframe[activeTimeframe] ?? "Live only";
+  const isHistoricalMerged = historicalCandlesForActiveTimeframe.length > 0 && !isMarketFallback;
 
   useEffect(() => subscribeToCollection("signals", seedSignals, setSignals), []);
   useEffect(() => subscribeToCollection("alerts", seedAlerts, setAlerts), []);
+  useEffect(() => {
+    if (historicalCandlesByTimeframe[activeTimeframe]) {
+      return;
+    }
+
+    let isCancelled = false;
+
+    const loadHistoricalCandles = async () => {
+      try {
+        const searchParams = new URLSearchParams({
+          timeframe: activeTimeframe,
+          limit: String(visibleCandleCount),
+        });
+        const response = await fetch(`${upbitHistoricalCandlesEndpoint}?${searchParams}`);
+
+        if (!response.ok) {
+          throw new Error("Historical candle proxy request failed");
+        }
+
+        const historicalData = (await response.json()) as HistoricalCandlesResponse;
+
+        if (!historicalData.success || historicalData.candles.length === 0) {
+          throw new Error("Historical candle proxy returned empty data");
+        }
+
+        if (!isCancelled) {
+          setHistoricalCandlesByTimeframe((previousCandles) => ({
+            ...previousCandles,
+            [activeTimeframe]: historicalData.candles,
+          }));
+          setHistoricalSourceByTimeframe((previousSources) => ({
+            ...previousSources,
+            [activeTimeframe]: `${historicalData.files.length}개 ZIP`,
+          }));
+        }
+      } catch {
+        if (!isCancelled) {
+          setHistoricalSourceByTimeframe((previousSources) => ({
+            ...previousSources,
+            [activeTimeframe]: "Live only",
+          }));
+        }
+      }
+    };
+
+    loadHistoricalCandles();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [activeTimeframe, historicalCandlesByTimeframe]);
+
   useEffect(() => {
     let isCancelled = false;
 
@@ -269,8 +417,13 @@ const riskIndex = useMemo(() => {
         }
 
         if (!isCancelled) {
+          const mergedCandles = mergeMarketCandles(
+            historicalCandlesForActiveTimeframe,
+            candleData,
+          ).slice(-visibleCandleCount);
+
           setTicker(nextTicker);
-          setChartCandles(toChartCandles(candleData));
+          setChartCandles(toChartCandles(mergedCandles));
           setMarketUpdatedAt(
             new Intl.DateTimeFormat("ko-KR", {
               hour: "2-digit",
@@ -299,7 +452,7 @@ const riskIndex = useMemo(() => {
       isCancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [activeTimeframeConfig.endpoint]);
+  }, [activeTimeframeConfig.endpoint, historicalCandlesForActiveTimeframe]);
 
   const selectedMentor = useMemo(
     () => mentors.find((mentor) => mentor.id === selectedMentorId) ?? mentors[0],
@@ -348,6 +501,19 @@ const riskIndex = useMemo(() => {
   const mirrorAlert = alerts.find((alert) => alert.id === "mirror") ?? alerts[0];
   const fomoAlert = alerts.find((alert) => alert.id === "fomo") ?? alerts[0];
   const patternProfile = patternProfiles[menteePattern];
+  const hoveredCandle =
+    hoveredCandleIndex === null ? null : chartCandles[hoveredCandleIndex] ?? null;
+  const hoveredCandleLeft =
+    hoveredCandleIndex !== null && chartCandles.length > 1
+      ? (hoveredCandleIndex / (chartCandles.length - 1)) * 100
+      : 50;
+  const hoverTooltipPlacement =
+    hoveredCandleLeft > 72 ? " align-right" : hoveredCandleLeft < 22 ? " align-left" : "";
+  const portfolioCoinReturnMax = portfolioMentor
+    ? Math.max(...portfolioMentor.coinReturns.map((coin) => Math.abs(coin.returnRate)), 1)
+    : 1;
+  const portfolioCoinReturnTotal =
+    portfolioMentor?.coinReturns.reduce((total, coin) => total + coin.returnRate, 0) ?? 0;
 
   const viewCopy = {
     match: {
@@ -413,46 +579,203 @@ const riskIndex = useMemo(() => {
     setChatMessages([]);
     setChatDraft("");
     setHasCompletedOnboarding(true);
+
+    // Firestore 저장 (비동기, 화면 전환과 무관하게 백그라운드에서 실행)
+    saveOnboardingResult({
+      userId: getSessionUserId(),
+      pattern: result.pattern,
+      investorType: result.type,
+      scores: result.scores,
+      answers: result.answers,
+      matchedMentorId: matchedMentor.id,
+    }).catch((error) => console.error("온보딩 저장 실패:", error));
   };
 
   const baseChatMessages: ChatMessage[] = [
     {
-      id: "mentor-checkin",
-      author: "mentor",
-      body: `${selectedMentor.name}입니다. 오늘은 BTC 변동성이 커서 진입 근거와 손절 기준부터 같이 확인해볼게요.`,
-      time: "오전 11:42",
-    },
-    {
-      id: "mentee-reply",
+      id: "mentee-crash-alert",
       author: "mentee",
-      body: "네, 방금 급등한 알트도 같이 봐도 될까요?",
-      time: "오전 11:43",
+      body: "멘토님, 지금 비트코인 갑자기 3% 넘게 빠지면서 음봉이 길어지는데 지금 시장가로 다 던져야 할까요? 대시보드 보니까 제 종합 Risk 지수도 82점(위험)까지 올라갔고 너무 불안합니다.",
+      time: "오전 10:33",
     },
     {
-      id: "mentor-guide",
+      id: "mentor-stopline-check",
       author: "mentor",
-      body: `${selectedMentor.style} 관점으로 먼저 과열 구간인지 체크하고, 매수 판단은 기록으로 남겨봅시다.`,
-      time: "오전 11:44",
+      body: "현재 급락은 특정 거시경제 지표 발표로 인한 단기 변동성 확대 구간으로 파악됩니다. 감정 지표와 스크린 타임이 급증한 상태에서는 즉각적인 매도보다, 우리가 사전에 설정했던 손절선(8,800만 원) 이탈 여부를 먼저 확인하는 신중한 접근이 필요합니다.",
+      warning: "멘토의 투자 권유는 AI AGENT가 실시간 모니터링으로 정제 중입니다. 투자 결정의 최종 책임은 본인에게 있습니다. ",
+      time: "오전 10:35",
+    },
+    {
+      id: "mentee-fomo-switch",
+      author: "mentee",
+      body: "아, 아직 손절선까지는 여유가 조금 있네요. 근데 지금 빗썸에서 엄청 급등하고 있는 알트코인이 있는데, 차라리 지금 비트코인 손실 난 걸 저기로 갈아타서 빠르게 메꾸는 건 어떨까요?",
+      time: "오전 10:36",
+    },
+    {
+      id: "mentor-fomo-guard",
+      author: "mentor",
+      body: "급락장에서 타 종목으로 추격 매수(FOMO)를 진행하는 것은 2차 손실로 이어질 확률이 매우 높습니다. 멘티님의 'Emotion Replay' 타임라인을 보면, 과거에도 급락 후 평균 5분 안에 뇌동매매를 하고 손실을 본 패턴이 있습니다. 지금은 신규 진입을 보류하고 30분봉 차트가 안정될 때까지 관망하시길 권장합니다.",
+      time: "오전 10:38",
+    },
+    {
+      id: "mentee-replay-check",
+      author: "mentee",
+      body: "말씀 듣고 타임라인 복기 기능을 다시 보니 정말 저번이랑 똑같이 조바심을 내고 있었네요. 갈아타지 않고 일단 멘토님 코멘트대로 30분봉 마감될 때까지 차트 보면서 대기하겠습니다.",
+      time: "오전 10:40",
+    },
+    {
+      id: "mentor-next-scenario",
+      author: "mentor",
+      body: "좋은 판단입니다. 감정적 대응을 자제하고 원칙을 지키는 것이 장기적인 자산 방어의 핵심입니다. 11시에 종가 마감되는 것을 확인한 후, 다음 대응 시나리오를 코칭 보드에 업데이트해 두겠습니다.",
+      time: "오전 10:42",
     },
   ];
 
-  const sendChatMessage = () => {
-    const trimmedMessage = chatDraft.trim();
-
-    if (!trimmedMessage) {
+  // ─── Firestore 실시간 채팅 연동 ─────────────────────────────────────────────
+  // 채팅방을 열면 시드 대화를 1회 저장하고 onSnapshot 리스너로 메시지를 실시간 구독한다.
+  // 멘토/멘티 어느 화면이든 같은 chatId 를 구독하므로 메시지가 양쪽에 즉시 동기화된다.
+  useEffect(() => {
+    if (!isChatOpen || !firestore) {
       return;
     }
 
-    setChatMessages((messages) => [
-      ...messages,
-      {
-        id: `mentee-${Date.now()}`,
-        author: "mentee",
-        body: trimmedMessage,
-        time: "방금",
-      },
-    ]);
+    const userId = getSessionUserId();
+    const chatId = buildChatId(userId, selectedMentor.id);
+    let unsubscribe = () => undefined as void;
+    let isActive = true;
+
+    const initChat = async () => {
+      try {
+        await seedChatIfEmpty(
+          chatId,
+          { userId, mentorId: selectedMentor.id, mentorName: selectedMentor.name },
+          baseChatMessages.map((message) => ({
+            author: message.author,
+            body: message.body,
+            time: message.time,
+            warning: message.warning,
+          })),
+        );
+      } catch (error) {
+        console.error("채팅 시드 실패:", error);
+      }
+
+      if (!isActive) {
+        return;
+      }
+
+      unsubscribe = subscribeToChatMessages(chatId, (messages) => {
+        setChatMessages(messages as ChatMessage[]);
+      });
+    };
+
+    void initChat();
+
+    return () => {
+      isActive = false;
+      unsubscribe();
+    };
+    // baseChatMessages 는 정적 콘텐츠라 의존성에서 제외한다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isChatOpen, selectedMentor.id]);
+
+  const sendChatMessage = async () => {
+    const trimmedMessage = chatDraft.trim();
+    if (!trimmedMessage || isMentorTyping) return;
+
+    const nowTime = () =>
+      new Intl.DateTimeFormat("ko-KR", { hour: "2-digit", minute: "2-digit" }).format(new Date());
+
+    // Firestore 연결 시: 단일 소스(Firestore)에 기록 → 리스너가 양쪽 화면에 실시간 반영
+    // 미연결 시: 기존 로컬 상태 기반 동작으로 폴백
+    const usingFirestore = Boolean(firestore);
+    const chatId = buildChatId(getSessionUserId(), selectedMentor.id);
+
+    // Claude API 호출용 전체 대화 기록 구성
+    // Firestore 모드에서는 chatMessages 가 이미 시드 대화를 포함한 전체 스레드다.
+    const thread: ChatMessage[] = usingFirestore
+      ? chatMessages
+      : [...baseChatMessages, ...chatMessages];
+    const history: ApiChatMessage[] = [
+      ...thread.map((m) => ({
+        role: (m.author === "mentor" ? "assistant" : "user") as "user" | "assistant",
+        content: m.body,
+      })),
+      { role: "user" as const, content: trimmedMessage },
+    ];
+
     setChatDraft("");
+    setIsMentorTyping(true);
+
+    // 멘티 메시지 기록
+    if (usingFirestore) {
+      try {
+        await appendChatMessage(chatId, {
+          author: "mentee",
+          body: trimmedMessage,
+          time: nowTime(),
+        });
+      } catch (error) {
+        console.error("멘티 메시지 저장 실패:", error);
+      }
+    } else {
+      setChatMessages((prev) => [
+        ...prev,
+        { id: `mentee-${Date.now()}`, author: "mentee", body: trimmedMessage, time: nowTime() },
+      ]);
+    }
+
+    try {
+      const reply = await callMentorChat({
+        mentor_id: selectedMentor.id,
+        mentor_name: selectedMentor.name,
+        mentor_style: selectedMentor.style,
+        mentor_specialty: selectedMentor.specialty,
+        mentor_philosophy: selectedMentor.philosophy,
+        messages: history,
+      });
+
+      if (usingFirestore) {
+        await appendChatMessage(chatId, { author: "mentor", body: reply, time: nowTime() });
+      } else {
+        setChatMessages((prev) => [
+          ...prev,
+          { id: `mentor-${Date.now()}`, author: "mentor", body: reply, time: nowTime() },
+        ]);
+      }
+    } catch (error) {
+      console.error("멘토 채팅 오류:", error);
+      const errorBody = "죄송합니다, 잠시 연결이 원활하지 않습니다. 다시 시도해 주세요.";
+      if (usingFirestore) {
+        await appendChatMessage(chatId, { author: "mentor", body: errorBody, time: "방금" }).catch(
+          (saveError) => console.error("에러 메시지 저장 실패:", saveError),
+        );
+      } else {
+        setChatMessages((prev) => [
+          ...prev,
+          { id: `mentor-err-${Date.now()}`, author: "mentor", body: errorBody, time: "방금" },
+        ]);
+      }
+    } finally {
+      setIsMentorTyping(false);
+    }
+  };
+
+  const startEditingPrinciples = () => {
+    setPrincipleDrafts(investmentPrinciples);
+    setIsEditingPrinciples(true);
+  };
+
+  const cancelEditingPrinciples = () => {
+    setPrincipleDrafts(investmentPrinciples);
+    setIsEditingPrinciples(false);
+  };
+
+  const saveInvestmentPrinciples = () => {
+    setInvestmentPrinciples(
+      principleDrafts.map((principle, index) => principle.trim() || defaultInvestmentPrinciples[index]),
+    );
+    setIsEditingPrinciples(false);
   };
 
   if (!hasCompletedOnboarding) {
@@ -520,36 +843,23 @@ const riskIndex = useMemo(() => {
         </header>
 
         <section className="status-strip">
-  {activeView === "match" ? (
-    <>
-      <span>온보딩 성향</span>
-      <strong>{patternProfile.label}</strong>
-      <span>{patternProfile.tone}</span>
-      <span>추천 멘토 {recommendedMentors.length}명</span>
-    </>
-  ) : (
-    <>
-      <span>Coment 실시간 분석</span>
-      <strong>{mirrorAlert.metric}</strong>
-      
-      {/* 추가된 Risk 지수 표시 영역 */}
-      <span style={{ 
-        display: 'flex', 
-        alignItems: 'center', 
-        gap: '6px',
-        color: riskIndex > 70 ? '#ef4444' : '#22c55e',
-        fontWeight: '600'
-      }}>
-        종합 Risk 
-        <strong style={{ fontSize: '1.1em' }}>{riskIndex.toFixed(0)}</strong>
-      </span>
-
-      <span>주문 취소 4회</span>
-      <span>차트 확대 15회</span>
-    </>
-  )}
-  <span className="firebase-state">{firestore ? "Firebase live" : "Seed data"}</span>
-</section>
+          {activeView === "match" ? (
+            <>
+              <span>온보딩 성향</span>
+              <strong>{patternProfile.label}</strong>
+              <span>{patternProfile.tone}</span>
+              <span>추천 멘토 {recommendedMentors.length}명</span>
+            </>
+          ) : (
+            <>
+              <span>Coment 실시간 분석</span>
+              <strong>{mirrorAlert.metric}</strong>
+              <span>주문 취소 4회</span>
+              <span>차트 확대 15회</span>
+            </>
+          )}
+          <span className="firebase-state">{firestore ? "Firebase live" : "Seed data"}</span>
+        </section>
 
         {activeView === "match" ? (
           <main className="matching-page">
@@ -685,16 +995,53 @@ const riskIndex = useMemo(() => {
                   <p className={`asset-change ${marketDirection}`}>{marketChangeText}</p>
                 </article>
 
-                <article className="mini-card">
-                  <span>멘토 수익률</span>
-                  <strong>+{selectedMentor.verifiedReturn.toFixed(1)}%</strong>
-                  <p>{selectedMentor.badge}</p>
+                <article className="principles-card">
+                  <div className="principles-card-head">
+                    <span>나의 투자 원칙</span>
+                    {isEditingPrinciples ? (
+                      <div className="principles-actions">
+                        <button type="button" onClick={cancelEditingPrinciples}>
+                          취소
+                        </button>
+                        <button className="primary" type="button" onClick={saveInvestmentPrinciples}>
+                          저장
+                        </button>
+                      </div>
+                    ) : (
+                      <button type="button" onClick={startEditingPrinciples}>
+                        수정하기
+                      </button>
+                    )}
+                  </div>
+                  {isEditingPrinciples ? (
+                    <div className="principle-editor" aria-label="나의 투자 원칙 수정">
+                      {principleDrafts.map((principle, index) => (
+                        <label key={`principle-draft-${index + 1}`}>
+                          <span>{index + 1}</span>
+                          <input
+                            value={principle}
+                            onChange={(event) => {
+                              const nextDrafts = [...principleDrafts];
+                              nextDrafts[index] = event.target.value;
+                              setPrincipleDrafts(nextDrafts);
+                            }}
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  ) : (
+                    <ol className="principle-list">
+                      {investmentPrinciples.map((principle, index) => (
+                        <li key={`principle-${index + 1}`}>{principle}</li>
+                      ))}
+                    </ol>
+                  )}
                 </article>
 
                 <article className="mini-card">
                   <span>감정 상태</span>
-                  <strong>공포 82%</strong>
-                  <p>급락 후 매도 시도 감지</p>
+                  <strong>안정 52%</strong>
+                  <p>급락 후 매도 시도 없음</p>
                 </article>
               </section>
 
@@ -710,28 +1057,48 @@ const riskIndex = useMemo(() => {
                       <button
                         className={activeTimeframe === timeframe.id ? "active" : ""}
                         key={timeframe.id}
-                        onClick={() => setActiveTimeframe(timeframe.id)}
+                        onClick={() => {
+                          setActiveTimeframe(timeframe.id);
+                          setHoveredCandleIndex(null);
+                        }}
                       >
                         {timeframe.label}
                       </button>
                     ))}
                   </div>
                   <span className={`market-live-pill ${isMarketFallback ? "fallback" : ""}`}>
-                    {isMarketFallback ? "Upbit fallback" : "Upbit live"}
-                    <small>{marketUpdatedAt}</small>
+                    {isMarketFallback
+                      ? "Upbit fallback"
+                      : isHistoricalMerged
+                        ? "Upbit hybrid"
+                        : "Upbit live"}
+                    <small>
+                      {isHistoricalMerged ? `${historicalSourceLabel} + ${marketUpdatedAt}` : marketUpdatedAt}
+                    </small>
                   </span>
                 </div>
 
-                <div className="chart-stage">
+                <div className="chart-stage" onMouseLeave={() => setHoveredCandleIndex(null)}>
                   <div className="grid-lines" />
                   <div
                     className="candle-chart"
                     aria-label={`비트코인 ${activeTimeframeConfig.candleLabel} 캔들 차트`}
                   >
+                    {hoveredCandle ? (
+                      <span
+                        className="chart-hover-line"
+                        style={{ left: `${hoveredCandleLeft}%` }}
+                      />
+                    ) : null}
                     {chartCandles.map((candle, index) => (
                       <span
-                        className={`candle ${candle.direction}`}
+                        className={`candle ${candle.direction}${
+                          hoveredCandleIndex === index ? " matched" : ""
+                        }`}
                         key={`${candle.id}-${index}`}
+                        onMouseEnter={() => setHoveredCandleIndex(index)}
+                        onMouseMove={() => setHoveredCandleIndex(index)}
+                        onMouseOver={() => setHoveredCandleIndex(index)}
                         style={
                           {
                             "--wick-bottom": `${candle.wickBottom}%`,
@@ -745,56 +1112,117 @@ const riskIndex = useMemo(() => {
                             }%`,
                           } as CSSProperties
                         }
-                        title={`${formatCurrency(Math.round(candle.close))} KRW`}
+                        title={`${candle.timeLabel} 종가 ${formatCurrency(
+                          Math.round(candle.close),
+                        )} KRW · 거래량 ${candle.volume.toFixed(4)} BTC`}
                       />
                     ))}
                   </div>
+                  <div className="volume-chart" aria-label={`${activeTimeframeConfig.candleLabel} 거래량`}>
+                    <span>거래량</span>
+                    <div className="volume-bars">
+                      {hoveredCandle ? (
+                        <span
+                          className="volume-hover-line"
+                          style={{ left: `${hoveredCandleLeft}%` }}
+                        />
+                      ) : null}
+                      {chartCandles.map((candle, index) => (
+                        <i
+                          className={`${candle.direction}${
+                            hoveredCandleIndex === index ? " matched" : ""
+                          }`}
+                          key={`${candle.id}-volume-${index}`}
+                          onMouseEnter={() => setHoveredCandleIndex(index)}
+                          onMouseMove={() => setHoveredCandleIndex(index)}
+                          onMouseOver={() => setHoveredCandleIndex(index)}
+                          style={
+                            {
+                              height: `${candle.volumeHeight}%`,
+                              left: `${
+                                chartCandles.length > 1
+                                  ? (index / (chartCandles.length - 1)) * 100
+                                  : 50
+                              }%`,
+                            } as CSSProperties
+                          }
+                          title={`거래량 ${candle.volume.toFixed(4)} BTC`}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                  {hoveredCandle ? (
+                    <div
+                      className={`chart-hover-tooltip${hoverTooltipPlacement}`}
+                      style={{ left: `${hoveredCandleLeft}%` }}
+                    >
+                      <span>{hoveredCandle.timeLabel}</span>
+                      <strong>{formatCurrency(Math.round(hoveredCandle.close))} KRW</strong>
+                      <dl>
+                        <div>
+                          <dt>시가</dt>
+                          <dd>{formatCurrency(Math.round(hoveredCandle.open))}</dd>
+                        </div>
+                        <div>
+                          <dt>고가</dt>
+                          <dd>{formatCurrency(Math.round(hoveredCandle.high))}</dd>
+                        </div>
+                        <div>
+                          <dt>저가</dt>
+                          <dd>{formatCurrency(Math.round(hoveredCandle.low))}</dd>
+                        </div>
+                        <div>
+                          <dt>종가</dt>
+                          <dd>{formatCurrency(Math.round(hoveredCandle.close))}</dd>
+                        </div>
+                        <div>
+                          <dt>등락</dt>
+                          <dd className={hoveredCandle.changeRate >= 0 ? "profit" : "loss"}>
+                            {percent(hoveredCandle.changeRate)}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>거래량</dt>
+                          <dd>{hoveredCandle.volume.toFixed(4)} BTC</dd>
+                        </div>
+                      </dl>
+                    </div>
+                  ) : null}
                 </div>
 
-              
- <div className="chart-insight-strip">
-  <div className="replay-card" style={{ flex: 2, padding: "20px", position: "relative" }}>
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "25px" }}>
-      <span style={{ fontSize: "12px", fontWeight: "bold", color: "#d4ed31", textTransform: "uppercase" }}>Emotion Replay</span>
-      <p style={{ margin: 0, fontSize: "13px", color: "#f30b0b" }}>"당신은 급락 후 평균 5분 안에 매도하는 패턴이 있습니다."</p>
-    </div>
-
-    <div style={{ position: "relative", padding: "0 10px", marginTop: "40px" }}>
-      <div style={{ position: "absolute", top: "6px", left: "25px", right: "25px", height: "1px", background: "rgba(255,255,255,0.2)" }} />
-      
-      <div style={{ display: "flex", justifyContent: "space-between", position: "relative" }}>
-        {/* 이제 replayEvents가 정의되어 있으므로 빨간 줄이 뜨지 않습니다 */}
-        {replayEvents.map((event, i) => (
-          <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", width: "70px" }}>
-            <div style={{ 
-              width: "12px", 
-              height: "12px", 
-              backgroundColor: event.type === "event" ? "#99dd0f" : "#31aed4", 
-              borderRadius: "50%", 
-              boxShadow: "0 0 10px rgba(212, 237, 49, 0.5)",
-              zIndex: 2,
-              marginBottom: "15px"
-            }} />
-            <span style={{ fontSize: "11px", color: "#0318f5", fontWeight: "bold" }}>{event.time}</span>
-            <span style={{ fontSize: "10px", color: "#888", marginTop: "4px", whiteSpace: "nowrap" }}>{event.label}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  
-  
-  {/* 기존 Upbit Sync 카드 영역은 그대로 두시면 됩니다 */}
-</div>
-  <div className="upbit-sync-card" style={{ flex: 1 }}>
-    <span>Upbit Sync</span>
-    <strong>BTC/KRW {activeTimeframeConfig.candleLabel}</strong>
-    <p>
-      {isMarketFallback
-        ? "API 연결 실패 시 seed 차트로 화면을 유지합니다."
-        : `${marketUpdatedAt} 기준 공개 API 데이터가 반영되었습니다.`}
-    </p>
-  </div>
-</div>
+                <div className="chart-insight-strip">
+                  <div className="replay-card">
+                    <div className="replay-heading">
+                      <span>Emotion Replay</span>
+                      <p>"당신은 급락 후 평균 5분 안에 매도하는 패턴이 있습니다"</p>
+                    </div>
+                    <div className="replay-timeline" aria-label="Emotion Replay timeline">
+                      {[
+                        { time: "10:32", label: "급락 시작", tone: "lime" },
+                        { time: "10:34", label: "뉴스 검색", tone: "blue" },
+                        { time: "10:36", label: "공포 투매", tone: "lime" },
+                        { time: "10:48", label: "반등 성공", tone: "lime" },
+                      ].map((event) => (
+                        <div className="replay-event" key={event.time}>
+                          <i className={event.tone} />
+                          <strong>{event.time}</strong>
+                          <span>{event.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="upbit-sync-card">
+                    <span>Upbit Sync</span>
+                    <strong>BTC/KRW {activeTimeframeConfig.candleLabel}</strong>
+                    <p>
+                      {isMarketFallback
+                        ? "API 연결 실패 시 seed 차트로 화면을 유지합니다."
+                        : isHistoricalMerged
+                          ? `과거 ZIP ${historicalSourceLabel}과 실시간 REST 캔들을 이어 붙였습니다.`
+                          : `${marketUpdatedAt} 기준 공개 API 데이터가 반영되었습니다.`}
+                    </p>
+                  </div>
+                </div>
               </article>
 
               <section className="bottom-grid">
@@ -948,18 +1376,40 @@ const riskIndex = useMemo(() => {
                 </div>
               </section>
 
-              <section className="portfolio-chart" aria-label={`${portfolioMentor.name} 멘토 수익 곡선`}>
-                <div className="portfolio-chart-line">
-                  <i style={{ height: "30%" }} />
-                  <i style={{ height: "42%" }} />
-                  <i style={{ height: "38%" }} />
-                  <i style={{ height: "55%" }} />
-                  <i style={{ height: "62%" }} />
-                  <i style={{ height: "58%" }} />
-                  <i style={{ height: "74%" }} />
-                  <i style={{ height: "82%" }} />
+              <section
+                className="portfolio-chart"
+                aria-label={`${portfolioMentor.name} 멘토 우량 코인별 수익률`}
+              >
+                <div className="portfolio-coin-chart">
+                  <div className="portfolio-coin-bars">
+                    {portfolioMentor.coinReturns.map((coin) => (
+                      <div className="portfolio-coin-item" key={coin.symbol} title={coin.name}>
+                        <div className="coin-bar-track">
+                          <i
+                            className={coin.returnRate >= 0 ? "positive" : "negative"}
+                            style={{
+                              height: `${Math.max(
+                                (Math.abs(coin.returnRate) / portfolioCoinReturnMax) * 100,
+                                8,
+                              )}%`,
+                            }}
+                          />
+                        </div>
+                        <div className="coin-return-label">
+                          <strong>{coin.symbol}</strong>
+                          <small>{coin.name}</small>
+                          <span className={coin.returnRate >= 0 ? "profit" : "loss"}>
+                            {signedRate(coin.returnRate)}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="portfolio-chart-summary">
+                    <span>우량 코인별 6개월 검증 수익률</span>
+                    <strong>합산 {signedRate(portfolioCoinReturnTotal)}</strong>
+                  </div>
                 </div>
-                <span>최근 6개월 검증 추이</span>
               </section>
             </div>
 
@@ -977,8 +1427,8 @@ const riskIndex = useMemo(() => {
                 <strong>{portfolioMentor.rating.toFixed(1)}</strong>
               </article>
               <article>
-                <span>멘티 수</span>
-                <strong>{portfolioMentor.menteeCount}명</strong>
+                <span>1시간 내 응답률</span>
+                <strong>{portfolioMentor.responseRate}%</strong>
               </article>
             </div>
 
@@ -1079,26 +1529,45 @@ const riskIndex = useMemo(() => {
             </div>
 
             <div className="chat-thread">
-              {[...baseChatMessages, ...chatMessages].map((message) => (
+              {(firestore ? chatMessages : [...baseChatMessages, ...chatMessages]).map((message) => (
                 <div className={`chat-bubble ${message.author}`} key={message.id}>
                   <p>{message.body}</p>
+                  {message.warning ? (
+                    <div className="chat-guardrail">
+                      <strong>경고</strong>
+                      {message.warning}
+                    </div>
+                  ) : null}
                   <span>{message.time}</span>
                 </div>
               ))}
+              {isMentorTyping && (
+                <div className="chat-bubble mentor">
+                  <p style={{ color: "#94a3b8", fontStyle: "italic" }}>
+                    {selectedMentor.name} 멘토가 입력 중...
+                  </p>
+                </div>
+              )}
             </div>
 
             <div className="chat-composer">
               <input
+                disabled={isMentorTyping}
                 onChange={(event) => setChatDraft(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    sendChatMessage();
+                  if (event.key === "Enter" && !isMentorTyping) {
+                    void sendChatMessage();
                   }
                 }}
-                placeholder="멘토에게 남길 질문을 입력하세요"
+                placeholder={isMentorTyping ? "멘토가 답변 중입니다..." : "멘토에게 질문을 입력하세요"}
                 value={chatDraft}
               />
-              <button className="solid-button" onClick={sendChatMessage}>
+              <button
+                className="solid-button"
+                disabled={isMentorTyping}
+                onClick={() => void sendChatMessage()}
+                style={{ opacity: isMentorTyping ? 0.5 : 1 }}
+              >
                 전송
               </button>
             </div>
