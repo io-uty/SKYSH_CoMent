@@ -217,7 +217,7 @@ function App() {
         <div className="brand-panel">
           <div className="brand-mark">C</div>
           <div>
-            <span>Coment</span>
+            <span>Coment</sgipan>
             <strong>코인 멘토링 앱</strong>
           </div>
         </div>
