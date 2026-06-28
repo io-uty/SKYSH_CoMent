@@ -1,7 +1,18 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import Onboarding, { type OnboardingResult } from "./Onboarding";
 import { seedAlerts, seedMentors, seedSignals } from "./data/seed";
-import { callMentorChat, firestore, getSessionUserId, saveOnboardingResult, subscribeToCollection, type ChatMessage as ApiChatMessage } from "./lib/firebase";
+import {
+  appendChatMessage,
+  buildChatId,
+  callMentorChat,
+  firestore,
+  getSessionUserId,
+  saveOnboardingResult,
+  seedChatIfEmpty,
+  subscribeToChatMessages,
+  subscribeToCollection,
+  type ChatMessage as ApiChatMessage,
+} from "./lib/firebase";
 import type { CoachingAlert, MarketSignal, Mentor, MentorPattern } from "./types";
 
 const fallbackChartBars = [
@@ -620,33 +631,99 @@ function App() {
     },
   ];
 
+  // ─── Firestore 실시간 채팅 연동 ─────────────────────────────────────────────
+  // 채팅방을 열면 시드 대화를 1회 저장하고 onSnapshot 리스너로 메시지를 실시간 구독한다.
+  // 멘토/멘티 어느 화면이든 같은 chatId 를 구독하므로 메시지가 양쪽에 즉시 동기화된다.
+  useEffect(() => {
+    if (!isChatOpen || !firestore) {
+      return;
+    }
+
+    const userId = getSessionUserId();
+    const chatId = buildChatId(userId, selectedMentor.id);
+    let unsubscribe = () => undefined as void;
+    let isActive = true;
+
+    const initChat = async () => {
+      try {
+        await seedChatIfEmpty(
+          chatId,
+          { userId, mentorId: selectedMentor.id, mentorName: selectedMentor.name },
+          baseChatMessages.map((message) => ({
+            author: message.author,
+            body: message.body,
+            time: message.time,
+            warning: message.warning,
+          })),
+        );
+      } catch (error) {
+        console.error("채팅 시드 실패:", error);
+      }
+
+      if (!isActive) {
+        return;
+      }
+
+      unsubscribe = subscribeToChatMessages(chatId, (messages) => {
+        setChatMessages(messages as ChatMessage[]);
+      });
+    };
+
+    void initChat();
+
+    return () => {
+      isActive = false;
+      unsubscribe();
+    };
+    // baseChatMessages 는 정적 콘텐츠라 의존성에서 제외한다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isChatOpen, selectedMentor.id]);
+
   const sendChatMessage = async () => {
     const trimmedMessage = chatDraft.trim();
     if (!trimmedMessage || isMentorTyping) return;
 
-    // 멘티 메시지 즉시 추가
-    const userUiMessage: ChatMessage = {
-      id: `mentee-${Date.now()}`,
-      author: "mentee",
-      body: trimmedMessage,
-      time: new Intl.DateTimeFormat("ko-KR", { hour: "2-digit", minute: "2-digit" }).format(new Date()),
-    };
-    setChatMessages((prev) => [...prev, userUiMessage]);
-    setChatDraft("");
-    setIsMentorTyping(true);
+    const nowTime = () =>
+      new Intl.DateTimeFormat("ko-KR", { hour: "2-digit", minute: "2-digit" }).format(new Date());
 
-    // Claude API 호출용 전체 대화 기록 구성 (baseChatMessages + chatMessages + 새 메시지)
+    // Firestore 연결 시: 단일 소스(Firestore)에 기록 → 리스너가 양쪽 화면에 실시간 반영
+    // 미연결 시: 기존 로컬 상태 기반 동작으로 폴백
+    const usingFirestore = Boolean(firestore);
+    const chatId = buildChatId(getSessionUserId(), selectedMentor.id);
+
+    // Claude API 호출용 전체 대화 기록 구성
+    // Firestore 모드에서는 chatMessages 가 이미 시드 대화를 포함한 전체 스레드다.
+    const thread: ChatMessage[] = usingFirestore
+      ? chatMessages
+      : [...baseChatMessages, ...chatMessages];
     const history: ApiChatMessage[] = [
-      ...baseChatMessages.map((m) => ({
-        role: (m.author === "mentor" ? "assistant" : "user") as "user" | "assistant",
-        content: m.body,
-      })),
-      ...chatMessages.map((m) => ({
+      ...thread.map((m) => ({
         role: (m.author === "mentor" ? "assistant" : "user") as "user" | "assistant",
         content: m.body,
       })),
       { role: "user" as const, content: trimmedMessage },
     ];
+
+    setChatDraft("");
+    setIsMentorTyping(true);
+
+    // 멘티 메시지 기록
+    if (usingFirestore) {
+      try {
+        await appendChatMessage(chatId, {
+          author: "mentee",
+          body: trimmedMessage,
+          time: nowTime(),
+        });
+      } catch (error) {
+        console.error("멘티 메시지 저장 실패:", error);
+      }
+    } else {
+      setChatMessages((prev) => [
+        ...prev,
+        { id: `mentee-${Date.now()}`, author: "mentee", body: trimmedMessage, time: nowTime() },
+      ]);
+    }
 
     try {
       const reply = await callMentorChat({
@@ -658,26 +735,27 @@ function App() {
         messages: history,
       });
 
-      setChatMessages((prev) => [
-        ...prev,
-        {
-          id: `mentor-${Date.now()}`,
-          author: "mentor",
-          body: reply,
-          time: new Intl.DateTimeFormat("ko-KR", { hour: "2-digit", minute: "2-digit" }).format(new Date()),
-        },
-      ]);
+      if (usingFirestore) {
+        await appendChatMessage(chatId, { author: "mentor", body: reply, time: nowTime() });
+      } else {
+        setChatMessages((prev) => [
+          ...prev,
+          { id: `mentor-${Date.now()}`, author: "mentor", body: reply, time: nowTime() },
+        ]);
+      }
     } catch (error) {
       console.error("멘토 채팅 오류:", error);
-      setChatMessages((prev) => [
-        ...prev,
-        {
-          id: `mentor-err-${Date.now()}`,
-          author: "mentor",
-          body: "죄송합니다, 잠시 연결이 원활하지 않습니다. 다시 시도해 주세요.",
-          time: "방금",
-        },
-      ]);
+      const errorBody = "죄송합니다, 잠시 연결이 원활하지 않습니다. 다시 시도해 주세요.";
+      if (usingFirestore) {
+        await appendChatMessage(chatId, { author: "mentor", body: errorBody, time: "방금" }).catch(
+          (saveError) => console.error("에러 메시지 저장 실패:", saveError),
+        );
+      } else {
+        setChatMessages((prev) => [
+          ...prev,
+          { id: `mentor-err-${Date.now()}`, author: "mentor", body: errorBody, time: "방금" },
+        ]);
+      }
     } finally {
       setIsMentorTyping(false);
     }
@@ -1451,7 +1529,7 @@ function App() {
             </div>
 
             <div className="chat-thread">
-              {[...baseChatMessages, ...chatMessages].map((message) => (
+              {(firestore ? chatMessages : [...baseChatMessages, ...chatMessages]).map((message) => (
                 <div className={`chat-bubble ${message.author}`} key={message.id}>
                   <p>{message.body}</p>
                   {message.warning ? (
