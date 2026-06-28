@@ -26,7 +26,24 @@
 ---
 
 ## Tech Stack
-* **Frontend:** Next.js, Tailwind CSS, Vercel
+* **Frontend:** Vite, React, TypeScript
 * **Backend:** Firebase (Firestore, Cloud Functions v2)
 * **AI:** Claude API (`claude-3-5-sonnet-20241022`)
 * **Language:** TypeScript
+
+---
+
+## Local Frontend
+
+```bash
+npm install
+npm run dev
+```
+
+프론트엔드는 Firebase 설정이 없거나 Firestore 컬렉션이 비어 있어도 초기 UI를 확인할 수 있도록 seed data fallback을 사용합니다.
+
+사용 컬렉션:
+
+* `mentors`
+* `signals`
+* `alerts`

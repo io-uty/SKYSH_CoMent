@@ -46,6 +46,10 @@ build/Release
 
 # Dependency directories
 node_modules/
+dist/
+.vite/
+.env.local
+*.tsbuildinfo
 
 # Optional npm cache directory
 .npm
