@@ -208,6 +208,11 @@ function App() {
   const [selectedMentorId, setSelectedMentorId] = useState(
     seedMentors.find((mentor) => mentor.pattern === "neutral")?.id ?? seedMentors[0].id,
   );
+
+const [screenTime, setScreenTime] = useState(2); // 초기값 2
+const [searchCount, setSearchCount] = useState(5); // 초기값 5
+const [concentration, setConcentration] = useState(30); // 초기값 30
+const [buyStreak, setBuyStreak] = useState(0); // 초기값 0
   const [activeView, setActiveView] = useState<AppView>("match");
   const [portfolioMentor, setPortfolioMentor] = useState<Mentor | null>(null);
   const [pendingMentor, setPendingMentor] = useState<Mentor | null>(null);
@@ -221,7 +226,21 @@ function App() {
   const [marketUpdatedAt, setMarketUpdatedAt] = useState("Seed data");
   const [isMarketFallback, setIsMarketFallback] = useState(true);
   const [activeTimeframe, setActiveTimeframe] = useState<MarketTimeframe>("30m");
-
+  const replayEvents = [
+  { time: "10:32", label: "급락 시작", type: "event" },
+  { time: "10:34", label: "뉴스 검색", type: "action" },
+  { time: "10:36", label: "공포 투매", type: "event" },
+  { time: "10:48", label: "반등 성공", type: "event" }
+];
+const riskIndex = useMemo(() => {
+    // 실제 앱 상태를 참조하도록 수정해야 합니다
+    const screenTimeScore = 2 * 10; 
+    const searchCountScore = 5 * 5; 
+    const concentrationScore = 30 * 0.5; 
+    const streakScore = 0 * 10; 
+    
+    return Math.min(100, screenTimeScore + searchCountScore + concentrationScore + streakScore);
+  }, [screenTime, searchCount, concentration, buyStreak]);
   const activeTimeframeConfig =
     marketTimeframes.find((timeframe) => timeframe.id === activeTimeframe) ?? marketTimeframes[1];
 
@@ -501,23 +520,36 @@ function App() {
         </header>
 
         <section className="status-strip">
-          {activeView === "match" ? (
-            <>
-              <span>온보딩 성향</span>
-              <strong>{patternProfile.label}</strong>
-              <span>{patternProfile.tone}</span>
-              <span>추천 멘토 {recommendedMentors.length}명</span>
-            </>
-          ) : (
-            <>
-              <span>Coment 실시간 분석</span>
-              <strong>{mirrorAlert.metric}</strong>
-              <span>주문 취소 4회</span>
-              <span>차트 확대 15회</span>
-            </>
-          )}
-          <span className="firebase-state">{firestore ? "Firebase live" : "Seed data"}</span>
-        </section>
+  {activeView === "match" ? (
+    <>
+      <span>온보딩 성향</span>
+      <strong>{patternProfile.label}</strong>
+      <span>{patternProfile.tone}</span>
+      <span>추천 멘토 {recommendedMentors.length}명</span>
+    </>
+  ) : (
+    <>
+      <span>Coment 실시간 분석</span>
+      <strong>{mirrorAlert.metric}</strong>
+      
+      {/* 추가된 Risk 지수 표시 영역 */}
+      <span style={{ 
+        display: 'flex', 
+        alignItems: 'center', 
+        gap: '6px',
+        color: riskIndex > 70 ? '#ef4444' : '#22c55e',
+        fontWeight: '600'
+      }}>
+        종합 Risk 
+        <strong style={{ fontSize: '1.1em' }}>{riskIndex.toFixed(0)}</strong>
+      </span>
+
+      <span>주문 취소 4회</span>
+      <span>차트 확대 15회</span>
+    </>
+  )}
+  <span className="firebase-state">{firestore ? "Firebase live" : "Seed data"}</span>
+</section>
 
         {activeView === "match" ? (
           <main className="matching-page">
@@ -719,27 +751,52 @@ function App() {
                   </div>
                 </div>
 
-                <div className="chart-insight-strip">
-                  <div className="replay-card">
-                    <span>Emotion Replay</span>
-                    <p>급락 후 평균 5분 안에 매도 패턴</p>
-                    <div className="replay-dots">
-                      <i />
-                      <i />
-                      <i />
-                      <i />
-                    </div>
-                  </div>
-                  <div className="upbit-sync-card">
-                    <span>Upbit Sync</span>
-                    <strong>BTC/KRW {activeTimeframeConfig.candleLabel}</strong>
-                    <p>
-                      {isMarketFallback
-                        ? "API 연결 실패 시 seed 차트로 화면을 유지합니다."
-                        : `${marketUpdatedAt} 기준 공개 API 데이터가 반영되었습니다.`}
-                    </p>
-                  </div>
-                </div>
+               <div className="chart-insight-strip">
+  {/* Emotion Replay 타임라인 카드 */}
+  <div className="replay-card" style={{ flex: 2, padding: "20px", position: "relative" }}>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "25px" }}>
+      <span style={{ fontSize: "12px", fontWeight: "bold", color: "#d4ed31", textTransform: "uppercase" }}>Emotion Replay</span>
+      <p style={{ margin: 0, fontSize: "13px", color: "#ccc" }}>"당신은 급락 후 평균 5분 안에 매도하는 패턴이 있습니다."</p>
+    </div>
+
+    {/* 타임라인 실선 및 아이템 */}
+    <div style={{ position: "relative", padding: "0 10px", marginTop: "40px" }}>
+      {/* 가로 중심선 */}
+      <div style={{ position: "absolute", top: "6px", left: "0", right: "0", height: "1px", background: "rgba(255,255,255,0.2)" }} />
+      
+      <div style={{ display: "flex", justifyContent: "space-between", position: "relative" }}>
+        {replayEvents.map((event, i) => (
+          <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", width: "60px" }}>
+            {/* 타임라인 점 */}
+            <div style={{ 
+              width: "12px", 
+              height: "12px", 
+              backgroundColor: event.type === "event" ? "#d4ed31" : "#31aed4", 
+              borderRadius: "50%", 
+              boxShadow: "0 0 10px rgba(212, 237, 49, 0.5)",
+              zIndex: 2,
+              marginBottom: "15px"
+            }} />
+            {/* 시간표시 (점 위로 올리고 싶으면 order를 조정하거나 위쪽에 배치 가능) */}
+            <span style={{ fontSize: "11px", color: "#fff", fontWeight: "bold" }}>{event.time}</span>
+            {/* 라벨표시 */}
+            <span style={{ fontSize: "11px", color: "#888", marginTop: "4px", whiteSpace: "nowrap" }}>{event.label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  </div>
+
+  <div className="upbit-sync-card" style={{ flex: 1 }}>
+    <span>Upbit Sync</span>
+    <strong>BTC/KRW {activeTimeframeConfig.candleLabel}</strong>
+    <p>
+      {isMarketFallback
+        ? "API 연결 실패 시 seed 차트로 화면을 유지합니다."
+        : `${marketUpdatedAt} 기준 공개 API 데이터가 반영되었습니다.`}
+    </p>
+  </div>
+</div>
               </article>
 
               <section className="bottom-grid">
