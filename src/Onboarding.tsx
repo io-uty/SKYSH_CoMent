@@ -1,80 +1,89 @@
 import { useState } from "react";
+import type { MentorPattern } from "./types";
+
+type OnboardingStat = {
+  labelLeft: string;
+  labelRight: string;
+  percent: number;
+  color: string;
+};
+
+export type OnboardingResult = {
+  pattern: MentorPattern;
+  type: string;
+  scores: number[];
+  answers: string[];
+  stats: OnboardingStat[];
+};
+
+type OnboardingProps = {
+  onComplete: (result: OnboardingResult) => void;
+};
 
 const ONBOARDING_QUESTIONS = [
-  {
-    question: "1. 코인 투자 경험이 있으신가요?",
-    options: ["전혀 없음", "1년 미만", "1~3년", "3년 이상"],
-  },
-  {
-    question: "2. 투자금이 30% 하락하면 어떻게 하시겠어요?",
-    options: ["즉시 매도", "추가 매수 고려", "유지", "공격적 추가 매수"],
-  },
-  {
-    question: "3. 기대하는 연간 수익률은?",
-    options: ["5~10%", "10~30%", "30~100%", "100% 이상도 가능"],
-  },
-  {
-    question: "4. 투자 기간은?",
-    options: ["단기(1개월 이내)", "중기(3~6개월)", "장기(1년 이상)", "무기한"],
-  },
-  {
-    question: "5. 하루에 코인 시세를 몇 번 확인하나요?",
-    options: ["거의 안 함", "1~2회", "5회 이상", "수시로 확인"],
-  },
-  {
-    question: "6. 새로운 알트코인 투자를 권유받으면?",
-    options: ["무조건 거절", "공부 후 소액 투자", "빠르게 진입", "큰 금액 바로 투자"],
-  },
-  {
-    question: "7. 투자 결정을 내릴 때 가장 중요한 기준은?",
-    options: ["안정성", "유동성", "수익성", "성장 가능성"],
-  },
-  {
-    question: "8. 코인 시장이 급등했을 때 내 심리는?",
-    options: ["이미 보유 중이라 기쁨", "FOMO 느낌", "이미 예측함", "무덤덤"],
-  },
-  {
-    question: "9. 투자 손실에 대한 내 태도는?",
-    options: ["밤에 잠 못 잠", "불안하지만 버팀", "오히려 기회로 봄", "감정 없음"],
-  },
-  {
-    question: "10. 코인 투자에서 가장 중요한 것은?",
-    options: ["원금 보존", "시장 공부", "빠른 수익 실현", "장기 우상향 믿음"],
-  },
+  { question: "1. 코인 투자 경험이 있으신가요?", options: ["전혀 없음", "1년 미만", "1~3년", "3년 이상"] },
+  { question: "2. 투자금이 30% 하락하면 어떻게 하시겠어요?", options: ["즉시 매도", "유지", "추가 매수 고려", "공격적 추가 매수"] },
+  { question: "3. 기대하는 연간 수익률은?", options: ["5~10%", "10~30%", "30~100%", "100% 이상도 가능"] },
+  { question: "4. 투자 기간은?", options: ["단기(1개월 이내)", "중기(3~6개월)", "장기(1년 이상)", "무기한"] },
+  { question: "5. 하루에 코인 시세를 몇 번 확인하나요?", options: ["거의 안 함", "1~2회", "5회 이상", "수시로 확인"] },
+  { question: "6. 새로운 알트코인 투자를 권유받으면?", options: ["무조건 거절", "공부 후 소액 투자", "빠르게 진입", "큰 금액 바로 투자"] },
+  { question: "7. 투자 결정을 내릴 때 가장 중요한 기준은?", options: ["안정성", "유동성", "성장 가능성", "수익성"] },
+  { question: "8. 코인 시장이 급등했을 때 내 심리는?", options: ["무덤덤", "이미 예측함", "이미 보유 중이라 기쁨", "FOMO 느낌"] },
+  { question: "9. 투자 손실에 대한 내 태도는?", options: ["감정 없음", "오히려 기회로 봄", "불안하지만 버팀", "밤에 잠 못 잠"] },
+  { question: "10. 코인 투자에서 가장 중요한 것은?", options: ["원금 보존", "시장 공부", "장기 우상향 믿음", "빠른 수익 실현"] },
 ];
 
-export default function Onboarding() {
+
+const initialResultData: OnboardingResult = {
+  pattern: "neutral",
+  type: "",
+  scores: [],
+  answers: [],
+  stats: [
+    { labelLeft: "안정 추구형", labelRight: "위험 감수형", percent: 0, color: "#45a29e" },
+    { labelLeft: "단기 스윙형", labelRight: "장기 가치형", percent: 0, color: "#e3a857" },
+    { labelLeft: "시장 둔감형", labelRight: "트렌드 민감형", percent: 0, color: "#5bbd82" },
+    { labelLeft: "이성적 멘탈", labelRight: "감정적 동요", percent: 0, color: "#b98bb9" },
+  ],
+};
+
+export default function Onboarding({ onComplete }: OnboardingProps) {
   const [currentStep, setCurrentStep] = useState(0);
   const [scores, setScores] = useState<number[]>([]);
+  const [answers, setAnswers] = useState<string[]>([]);
   const [showResult, setShowResult] = useState(false);
-  const [resultData, setResultData] = useState({
-    type: "",
-    stats: [
-      { labelLeft: "안정 추구형", labelRight: "위험 감수형", percent: 0, color: "#45a29e" },
-      { labelLeft: "단기 스윙형", labelRight: "장기 가치형", percent: 0, color: "#e3a857" },
-      { labelLeft: "시장 둔감형", labelRight: "트렌드 민감형", percent: 0, color: "#5bbd82" },
-      { labelLeft: "이성적 멘탈", labelRight: "감정적 동요", percent: 0, color: "#b98bb9" },
-    ],
-  });
+  const [resultData, setResultData] = useState<OnboardingResult>(initialResultData);
 
   const handleSelect = (optionIndex: number) => {
+    const selectedAnswer = ONBOARDING_QUESTIONS[currentStep].options[optionIndex];
     const newScores = [...scores, optionIndex + 1];
+    const newAnswers = [...answers, selectedAnswer];
     setScores(newScores);
+    setAnswers(newAnswers);
 
     if (currentStep < ONBOARDING_QUESTIONS.length - 1) {
       setCurrentStep(currentStep + 1);
     } else {
-      calculateResult(newScores);
+      calculateResult(newScores, newAnswers);
       setShowResult(true);
     }
   };
 
-  const calculateResult = (finalScores: number[]) => {
+  const calculateResult = (finalScores: number[], finalAnswers: string[]) => {
     const totalScore = finalScores.reduce((acc, curr) => acc + curr, 0);
     let investorType = "";
-    if (totalScore <= 18) investorType = "수비적인 투자자";
-    else if (totalScore <= 28) investorType = "중립적인 투자자";
-    else investorType = "공격적인 투자자";
+    let pattern: MentorPattern = "neutral";
+
+    if (totalScore <= 18) {
+      investorType = "수비적인 투자자";
+      pattern = "defensive";
+    } else if (totalScore <= 28) {
+      investorType = "중립적인 투자자";
+      pattern = "neutral";
+    } else {
+      investorType = "공격적인 투자자";
+      pattern = "aggressive";
+    }
 
     const riskPercent = Math.round(((finalScores[1] + finalScores[2] + finalScores[5] - 3) / 9) * 100);
     const termPercent = Math.round(((finalScores[3] + finalScores[9] - 2) / 6) * 100);
@@ -83,7 +92,10 @@ export default function Onboarding() {
     const emotionPercent = Math.round(((reverseEmotion - 2) / 6) * 100);
 
     setResultData({
+      pattern,
       type: investorType,
+      scores: finalScores,
+      answers: finalAnswers,
       stats: [
         { labelLeft: "안정 추구형", labelRight: "위험 감수형", percent: riskPercent, color: "#45a29e" },
         { labelLeft: "단기 스윙형", labelRight: "장기 가치형", percent: termPercent, color: "#e3a857" },
@@ -91,6 +103,14 @@ export default function Onboarding() {
         { labelLeft: "이성적 멘탈", labelRight: "감정적 동요", percent: emotionPercent, color: "#8a6d96" },
       ]
     });
+  };
+
+  const restartSurvey = () => {
+    setCurrentStep(0);
+    setScores([]);
+    setAnswers([]);
+    setResultData(initialResultData);
+    setShowResult(false);
   };
 
   if (showResult) {
@@ -131,17 +151,17 @@ export default function Onboarding() {
 
             {/* 버튼 2개 영역 */}
             <div style={styles.buttonGroup}>
-              <button 
-                style={styles.primaryButton} 
-                onClick={() => alert("코칭 보드로 이동합니다.")}
+              <button
+                style={styles.primaryButton}
+                onClick={() => onComplete(resultData)}
               >
-                코칭 보드 입장하기
+                멘토 매칭 보기
               </button>
-              <button 
-                style={styles.secondaryButton} 
-                onClick={() => window.location.href = "https://www.upbit.com"} // 예시로 페이지 새로고침(처음으로) 설정
+              <button
+                style={styles.secondaryButton}
+                onClick={restartSurvey}
               >
-                메인페이지로 이동
+                설문 다시하기
               </button>
             </div>
           </div>
