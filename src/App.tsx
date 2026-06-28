@@ -8,7 +8,6 @@ const chartBars = [46, 58, 72, 65, 38, 28, 42, 64, 55, 31, 25, 48, 79, 70, 44, 3
 const appViews = [
   { id: "coach", label: "코칭 보드", icon: "◫" },
   { id: "match", label: "멘토 매칭", icon: "◇" },
-  { id: "report", label: "감정 리포트", icon: "↯" },
   { id: "wallet", label: "구독 지갑", icon: "□" },
 ] as const;
 
@@ -153,12 +152,6 @@ function App() {
                       style={{ height: `${height}%` }}
                     />
                   ))}
-                </div>
-                <div className="emotion-card">
-                  <span>{mirrorAlert.title}</span>
-                  <strong>{mirrorAlert.metric}</strong>
-                  <p>{mirrorAlert.description}</p>
-                  <button>30초 후 다시 결정</button>
                 </div>
                 <div className="replay-card">
                   <span>Emotion Replay</span>
