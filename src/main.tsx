@@ -1,34 +1,16 @@
-// import React from "react";
-// import ReactDOM from "react-dom/client";
-// import App from "./App";
-// import "./styles.css";
-
-// ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-//   <React.StrictMode>
-//     <App />
-//   </React.StrictMode>,
-// );
-
-
-// import React from "react";
-// import ReactDOM from "react-dom/client";
-// import MentorAssistant from "./MentorAssistant"; // 새로 만든 파일 경로로 수정
-// import "./styles.css";
-
-// ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-//   <React.StrictMode>
-//     <MentorAssistant /> {/* App 대신 MentorAssistant를 실행합니다 */}
-//   </React.StrictMode>,
-// ); 
-
 import React from "react";
 import ReactDOM from "react-dom/client";
-import Mentor from "./Mentor"; // Mentor.tsx 파일을 불러오도록 수정
+import App from "./App";
+import Mentor from "./Mentor";
 import "./styles.css";
 
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    <Mentor /> {/* Mentor 컴포넌트를 실행합니다 */}
-  </React.StrictMode>,
-);
+// 역할 라우팅:
+//   - 기본( ?role 없음 )        → 멘티 화면(App)
+//   - ?role=mentor              → 멘토 화면(Mentor)
+// 같은 채팅방을 보려면 두 화면 모두 같은 ?room=값을 쓰면 된다. (미지정 시 기본 공유 방)
+const role = new URLSearchParams(window.location.search).get("role");
+const isMentorView = role === "mentor";
 
+ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+  <React.StrictMode>{isMentorView ? <Mentor /> : <App />}</React.StrictMode>,
+);

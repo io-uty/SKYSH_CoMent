@@ -598,3 +598,72 @@ export const chatWithMentor = onRequest({ cors: true, secrets: ["ANTHROPIC_API_K
     res.status(500).json({ success: false, error: "멘토 응답 생성에 실패했습니다." });
   }
 });
+
+// ─── 프롬프트 4: 멘토 메시지 정제(모니터링) ──────────────────────────────────
+const REFINE_SYSTEM_PROMPT = `
+너는 금융 및 코인 시장의 공정한 모니터링 AI야. 멘토가 작성한 투자 정보 메시지를 분석해서 다음 규칙에 따라 정제해줘.
+
+[규칙]
+1. 객관성 유지: 과장·단정·선동적 표현을 객관적이고 중립적인 표현으로 다듬어줘. 사실과 의견을 구분하고, 근거 없는 확정적 예측은 완화해줘.
+2. 위험 내용 필터링: 수익 보장("100% 수익", "무조건 오른다"), 단정적 매수·매도 지시("지금 사세요", "풀매수"), 외부 채널·리딩방 유도, 입금·송금 유도, 허위 정보가 포함되면 status를 "rejected"로 하고 reason에 사유를 적어줘.
+3. 안전하다면 status를 "approved"로 하고, refinedContent에 객관적으로 정제된 메시지를 담아줘. 원문의 핵심 정보와 의도는 유지하되 표현만 다듬어줘.
+
+[응답 포맷]
+반드시 JSON으로만 답해줘. 코드 블록이나 다른 텍스트 없이 순수 JSON만 출력해.
+{
+  "status": "approved" | "rejected",
+  "refinedContent": "정제된 내용",
+  "reason": "rejected 되었을 때의 사유"
+}
+`.trim();
+
+// 모델이 코드 펜스로 감싼 JSON 을 보내는 경우를 대비해 안전하게 추출한다.
+const extractJson = (raw: string): string => {
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenced) {
+    return fenced[1].trim();
+  }
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    return raw.slice(start, end + 1);
+  }
+  return raw.trim();
+};
+
+// ─── Function 4: POST /refineMentorPost ──────────────────────────────────────
+export const refineMentorPost = onRequest(
+  { cors: true, secrets: ["ANTHROPIC_API_KEY"] },
+  async (req, res) => {
+    if (req.method !== "POST") {
+      res.status(405).json({ success: false, error: "POST 메서드만 허용됩니다." });
+      return;
+    }
+
+    const { message } = req.body as { message?: string };
+
+    if (!message || !message.trim()) {
+      res.status(400).json({ success: false, error: "message가 누락되었습니다." });
+      return;
+    }
+
+    try {
+      const raw = await callClaude(REFINE_SYSTEM_PROMPT, message.trim());
+      const parsed = JSON.parse(extractJson(raw)) as {
+        status: "approved" | "rejected";
+        refinedContent: string;
+        reason: string;
+      };
+
+      res.status(200).json({
+        success: true,
+        status: parsed.status,
+        refinedContent: parsed.refinedContent ?? "",
+        reason: parsed.reason ?? "",
+      });
+    } catch (error) {
+      console.error("refineMentorPost 오류:", error);
+      res.status(500).json({ success: false, error: "메시지 정제에 실패했습니다." });
+    }
+  }
+);

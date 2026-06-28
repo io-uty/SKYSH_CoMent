@@ -118,6 +118,45 @@ export async function callMentorChat(payload: MentorChatPayload): Promise<string
   return data.reply;
 }
 
+// ─── 멘토 메시지 정제(모니터링 AI) 호출 ─────────────────────────────────────
+// 멘토가 작성한 메시지를 백엔드 AI 로 보내 객관성 검수/정제한다.
+// approved 면 refinedContent 를 멘티에게 전달하고, rejected 면 reason 으로 차단한다.
+export type RefineResult = {
+  status: "approved" | "rejected";
+  refinedContent: string;
+  reason: string;
+};
+
+export async function refineMentorMessage(message: string): Promise<RefineResult> {
+  if (!FUNCTIONS_BASE_URL) {
+    throw new Error("VITE_FUNCTIONS_BASE_URL 환경변수가 설정되지 않았습니다.");
+  }
+
+  const response = await fetch(`${FUNCTIONS_BASE_URL}/refineMentorPost`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+  });
+
+  const data = (await response.json()) as {
+    success: boolean;
+    status?: "approved" | "rejected";
+    refinedContent?: string;
+    reason?: string;
+    error?: string;
+  };
+
+  if (!data.success || !data.status) {
+    throw new Error(data.error ?? "메시지 정제에 실패했습니다.");
+  }
+
+  return {
+    status: data.status,
+    refinedContent: data.refinedContent ?? "",
+    reason: data.reason ?? "",
+  };
+}
+
 // ─── 멘토-멘티 1:1 채팅 (Firestore 실시간 연동) ──────────────────────────────
 // 메시지 경로: chats/{chatId}/messages/{messageId}
 // chatId 는 (멘티 userId, 멘토 mentorId) 쌍으로 고유하게 결정된다.
@@ -132,6 +171,21 @@ export type StoredChatMessage = {
 
 export function buildChatId(userId: string, mentorId: string): string {
   return `${userId}__${mentorId}`;
+}
+
+// 멘티/멘토가 공유하는 채팅방 ID.
+// 두 사용자가 서로 다른 브라우저여도 같은 방을 보도록 URL 쿼리(?room=)로 맞출 수 있고,
+// 미지정 시 기본 공유 방으로 연결된다. (예: 멘티 탭과 멘토 탭이 자동으로 같은 방)
+export const DEFAULT_CHAT_ROOM = "coment-live-room";
+
+export function getRoomId(): string {
+  if (typeof window !== "undefined") {
+    const room = new URLSearchParams(window.location.search).get("room");
+    if (room) {
+      return room;
+    }
+  }
+  return DEFAULT_CHAT_ROOM;
 }
 
 // 채팅 메시지 실시간 구독 (onSnapshot 리스너)
