@@ -9,7 +9,10 @@ const fallbackChartBars = [
 ];
 
 const upbitTickerEndpoint = "https://api.upbit.com/v1/ticker?markets=KRW-BTC";
+const upbitHistoricalCandlesEndpoint =
+  import.meta.env.VITE_UPBIT_HISTORICAL_CANDLES_ENDPOINT ?? "/api/upbitHistoricalCandles";
 const marketRefreshMs = 10000;
+const visibleCandleCount = 72;
 const marketTimeframes = [
   {
     id: "1m",
@@ -77,6 +80,15 @@ type ChartCandle = {
   volumeHeight: number;
 };
 
+type HistoricalCandlesResponse = {
+  success: boolean;
+  timeframe: MarketTimeframe;
+  files: string[];
+  candles: UpbitCandle[];
+};
+
+const emptyHistoricalCandles: UpbitCandle[] = [];
+
 const fallbackTicker: UpbitTicker = {
   trade_price: 91875000,
   signed_change_rate: 0.0078,
@@ -115,8 +127,38 @@ function formatCandleDateTime(value: string) {
   return `${month}/${day} ${hour}:${minute}${second !== "00" ? `:${second}` : ""}`;
 }
 
+function candleTimeValue(candle: Pick<UpbitCandle, "candle_date_time_kst">) {
+  if (candle.candle_date_time_kst.startsWith("seed-")) {
+    return Number(candle.candle_date_time_kst.replace("seed-", ""));
+  }
+
+  const parsedTime = Date.parse(candle.candle_date_time_kst);
+  return Number.isNaN(parsedTime) ? 0 : parsedTime;
+}
+
+function mergeMarketCandles(historicalCandles: UpbitCandle[], liveCandles: UpbitCandle[]) {
+  const candlesByTime = new Map<number, UpbitCandle>();
+
+  for (const candle of historicalCandles) {
+    candlesByTime.set(candleTimeValue(candle), candle);
+  }
+
+  for (const candle of liveCandles) {
+    candlesByTime.set(candleTimeValue(candle), candle);
+  }
+
+  return [...candlesByTime.entries()]
+    .sort(([leftTime], [rightTime]) => leftTime - rightTime)
+    .map(([, candle]) => candle);
+}
+
 function toChartCandles(candles: UpbitCandle[]) {
-  const orderedCandles = [...candles].reverse();
+  const orderedCandles = [...candles].sort((left, right) => candleTimeValue(left) - candleTimeValue(right));
+
+  if (orderedCandles.length === 0) {
+    return [];
+  }
+
   const minLow = Math.min(...orderedCandles.map((candle) => candle.low_price));
   const maxHigh = Math.max(...orderedCandles.map((candle) => candle.high_price));
   const priceRange = Math.max(maxHigh - minLow, 1);
@@ -167,6 +209,7 @@ type ChatMessage = {
   author: "mentor" | "mentee";
   body: string;
   time: string;
+  warning?: string;
 };
 
 const patternProfiles: Record<
@@ -262,13 +305,75 @@ function App() {
   const [marketUpdatedAt, setMarketUpdatedAt] = useState("Seed data");
   const [isMarketFallback, setIsMarketFallback] = useState(true);
   const [activeTimeframe, setActiveTimeframe] = useState<MarketTimeframe>("30m");
+  const [historicalCandlesByTimeframe, setHistoricalCandlesByTimeframe] = useState<
+    Partial<Record<MarketTimeframe, UpbitCandle[]>>
+  >({});
+  const [historicalSourceByTimeframe, setHistoricalSourceByTimeframe] = useState<
+    Partial<Record<MarketTimeframe, string>>
+  >({});
   const [hoveredCandleIndex, setHoveredCandleIndex] = useState<number | null>(null);
 
   const activeTimeframeConfig =
     marketTimeframes.find((timeframe) => timeframe.id === activeTimeframe) ?? marketTimeframes[1];
+  const historicalCandlesForActiveTimeframe =
+    historicalCandlesByTimeframe[activeTimeframe] ?? emptyHistoricalCandles;
+  const historicalSourceLabel = historicalSourceByTimeframe[activeTimeframe] ?? "Live only";
+  const isHistoricalMerged = historicalCandlesForActiveTimeframe.length > 0 && !isMarketFallback;
 
   useEffect(() => subscribeToCollection("signals", seedSignals, setSignals), []);
   useEffect(() => subscribeToCollection("alerts", seedAlerts, setAlerts), []);
+  useEffect(() => {
+    if (historicalCandlesByTimeframe[activeTimeframe]) {
+      return;
+    }
+
+    let isCancelled = false;
+
+    const loadHistoricalCandles = async () => {
+      try {
+        const searchParams = new URLSearchParams({
+          timeframe: activeTimeframe,
+          limit: String(visibleCandleCount),
+        });
+        const response = await fetch(`${upbitHistoricalCandlesEndpoint}?${searchParams}`);
+
+        if (!response.ok) {
+          throw new Error("Historical candle proxy request failed");
+        }
+
+        const historicalData = (await response.json()) as HistoricalCandlesResponse;
+
+        if (!historicalData.success || historicalData.candles.length === 0) {
+          throw new Error("Historical candle proxy returned empty data");
+        }
+
+        if (!isCancelled) {
+          setHistoricalCandlesByTimeframe((previousCandles) => ({
+            ...previousCandles,
+            [activeTimeframe]: historicalData.candles,
+          }));
+          setHistoricalSourceByTimeframe((previousSources) => ({
+            ...previousSources,
+            [activeTimeframe]: `${historicalData.files.length}개 ZIP`,
+          }));
+        }
+      } catch {
+        if (!isCancelled) {
+          setHistoricalSourceByTimeframe((previousSources) => ({
+            ...previousSources,
+            [activeTimeframe]: "Live only",
+          }));
+        }
+      }
+    };
+
+    loadHistoricalCandles();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [activeTimeframe, historicalCandlesByTimeframe]);
+
   useEffect(() => {
     let isCancelled = false;
 
@@ -292,8 +397,13 @@ function App() {
         }
 
         if (!isCancelled) {
+          const mergedCandles = mergeMarketCandles(
+            historicalCandlesForActiveTimeframe,
+            candleData,
+          ).slice(-visibleCandleCount);
+
           setTicker(nextTicker);
-          setChartCandles(toChartCandles(candleData));
+          setChartCandles(toChartCandles(mergedCandles));
           setMarketUpdatedAt(
             new Intl.DateTimeFormat("ko-KR", {
               hour: "2-digit",
@@ -322,7 +432,7 @@ function App() {
       isCancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [activeTimeframeConfig.endpoint]);
+  }, [activeTimeframeConfig.endpoint, historicalCandlesForActiveTimeframe]);
 
   const selectedMentor = useMemo(
     () => mentors.find((mentor) => mentor.id === selectedMentorId) ?? mentors[0],
@@ -463,22 +573,41 @@ function App() {
 
   const baseChatMessages: ChatMessage[] = [
     {
-      id: "mentor-checkin",
-      author: "mentor",
-      body: `${selectedMentor.name}입니다. 오늘은 BTC 변동성이 커서 진입 근거와 손절 기준부터 같이 확인해볼게요.`,
-      time: "오전 11:42",
-    },
-    {
-      id: "mentee-reply",
+      id: "mentee-crash-alert",
       author: "mentee",
-      body: "네, 방금 급등한 알트도 같이 봐도 될까요?",
-      time: "오전 11:43",
+      body: "멘토님, 지금 비트코인 갑자기 3% 넘게 빠지면서 음봉이 길어지는데 지금 시장가로 다 던져야 할까요? 대시보드 보니까 제 종합 Risk 지수도 82점(위험)까지 올라갔고 너무 불안합니다.",
+      time: "오전 10:33",
     },
     {
-      id: "mentor-guide",
+      id: "mentor-stopline-check",
       author: "mentor",
-      body: `${selectedMentor.style} 관점으로 먼저 과열 구간인지 체크하고, 매수 판단은 기록으로 남겨봅시다.`,
-      time: "오전 11:44",
+      body: "현재 급락은 특정 거시경제 지표 발표로 인한 단기 변동성 확대 구간으로 파악됩니다. 감정 지표와 스크린 타임이 급증한 상태에서는 즉각적인 매도보다, 우리가 사전에 설정했던 손절선(8,800만 원) 이탈 여부를 먼저 확인하는 신중한 접근이 필요합니다.",
+      warning: "멘토의 투자 권유는 AI AGENT가 실시간 모니터링으로 정제 중입니다. 투자 결정의 최종 책임은 본인에게 있습니다. ",
+      time: "오전 10:35",
+    },
+    {
+      id: "mentee-fomo-switch",
+      author: "mentee",
+      body: "아, 아직 손절선까지는 여유가 조금 있네요. 근데 지금 빗썸에서 엄청 급등하고 있는 알트코인이 있는데, 차라리 지금 비트코인 손실 난 걸 저기로 갈아타서 빠르게 메꾸는 건 어떨까요?",
+      time: "오전 10:36",
+    },
+    {
+      id: "mentor-fomo-guard",
+      author: "mentor",
+      body: "급락장에서 타 종목으로 추격 매수(FOMO)를 진행하는 것은 2차 손실로 이어질 확률이 매우 높습니다. 멘티님의 'Emotion Replay' 타임라인을 보면, 과거에도 급락 후 평균 5분 안에 뇌동매매를 하고 손실을 본 패턴이 있습니다. 지금은 신규 진입을 보류하고 30분봉 차트가 안정될 때까지 관망하시길 권장합니다.",
+      time: "오전 10:38",
+    },
+    {
+      id: "mentee-replay-check",
+      author: "mentee",
+      body: "말씀 듣고 타임라인 복기 기능을 다시 보니 정말 저번이랑 똑같이 조바심을 내고 있었네요. 갈아타지 않고 일단 멘토님 코멘트대로 30분봉 마감될 때까지 차트 보면서 대기하겠습니다.",
+      time: "오전 10:40",
+    },
+    {
+      id: "mentor-next-scenario",
+      author: "mentor",
+      body: "좋은 판단입니다. 감정적 대응을 자제하고 원칙을 지키는 것이 장기적인 자산 방어의 핵심입니다. 11시에 종가 마감되는 것을 확인한 후, 다음 대응 시나리오를 코칭 보드에 업데이트해 두겠습니다.",
+      time: "오전 10:42",
     },
   ];
 
@@ -753,8 +882,14 @@ function App() {
                     ))}
                   </div>
                   <span className={`market-live-pill ${isMarketFallback ? "fallback" : ""}`}>
-                    {isMarketFallback ? "Upbit fallback" : "Upbit live"}
-                    <small>{marketUpdatedAt}</small>
+                    {isMarketFallback
+                      ? "Upbit fallback"
+                      : isHistoricalMerged
+                        ? "Upbit hybrid"
+                        : "Upbit live"}
+                    <small>
+                      {isHistoricalMerged ? `${historicalSourceLabel} + ${marketUpdatedAt}` : marketUpdatedAt}
+                    </small>
                   </span>
                 </div>
 
@@ -887,7 +1022,9 @@ function App() {
                     <p>
                       {isMarketFallback
                         ? "API 연결 실패 시 seed 차트로 화면을 유지합니다."
-                        : `${marketUpdatedAt} 기준 공개 API 데이터가 반영되었습니다.`}
+                        : isHistoricalMerged
+                          ? `과거 ZIP ${historicalSourceLabel}과 실시간 REST 캔들을 이어 붙였습니다.`
+                          : `${marketUpdatedAt} 기준 공개 API 데이터가 반영되었습니다.`}
                     </p>
                   </div>
                 </div>
@@ -1200,6 +1337,12 @@ function App() {
               {[...baseChatMessages, ...chatMessages].map((message) => (
                 <div className={`chat-bubble ${message.author}`} key={message.id}>
                   <p>{message.body}</p>
+                  {message.warning ? (
+                    <div className="chat-guardrail">
+                      <strong>경고</strong>
+                      {message.warning}
+                    </div>
+                  ) : null}
                   <span>{message.time}</span>
                 </div>
               ))}

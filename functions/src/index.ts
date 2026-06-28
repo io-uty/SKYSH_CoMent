@@ -1,9 +1,245 @@
 import { onRequest } from "firebase-functions/v2/https";
 import * as admin from "firebase-admin";
+import { inflateRawSync } from "node:zlib";
 
 // Firebase Admin 초기화
 admin.initializeApp();
 const db = admin.firestore();
+
+const UPBIT_HISTORICAL_LISTING_ENDPOINT =
+  "https://crix-data-api.upbit.com/api/v1/market-data/listing";
+const UPBIT_HISTORICAL_DOWNLOAD_HOST = "https://crix-data.upbit.com";
+const SUPPORTED_HISTORICAL_TIMEFRAMES = {
+  "1m": { path: "1m", rowsPerDailyFile: 1440 },
+  "30m": { path: "30m", rowsPerDailyFile: 48 },
+  "1h": { path: "60m", rowsPerDailyFile: 24 },
+  "4h": { path: "240m", rowsPerDailyFile: 6 },
+  "1d": { path: "day", rowsPerDailyFile: 1 },
+} as const;
+
+type HistoricalTimeframe = keyof typeof SUPPORTED_HISTORICAL_TIMEFRAMES;
+
+type UpbitHistoricalFile = {
+  key: string;
+  size: number;
+  lastModified: string | null;
+  type: "DIRECTORY" | "FILE";
+};
+
+type HistoricalCandle = {
+  candle_date_time_kst: string;
+  opening_price: number;
+  high_price: number;
+  low_price: number;
+  trade_price: number;
+  candle_acc_trade_volume: number;
+};
+
+const isHistoricalTimeframe = (value: unknown): value is HistoricalTimeframe =>
+  typeof value === "string" && value in SUPPORTED_HISTORICAL_TIMEFRAMES;
+
+const toKstDateTime = (utcDateTime: string) => {
+  const date = new Date(`${utcDateTime}Z`);
+  const kst = new Date(date.getTime() + 9 * 60 * 60 * 1000);
+  return kst.toISOString().slice(0, 19);
+};
+
+const unzipSingleCsv = (zipBuffer: Buffer) => {
+  const findSignature = (signature: number, start = zipBuffer.length - 4) => {
+    for (let index = start; index >= 0; index -= 1) {
+      if (zipBuffer.readUInt32LE(index) === signature) {
+        return index;
+      }
+    }
+
+    return -1;
+  };
+
+  const endOfCentralDirectory = findSignature(0x06054b50);
+  if (endOfCentralDirectory < 0) {
+    throw new Error("ZIP central directory를 찾을 수 없습니다.");
+  }
+
+  const centralDirectoryOffset = zipBuffer.readUInt32LE(endOfCentralDirectory + 16);
+  if (zipBuffer.readUInt32LE(centralDirectoryOffset) !== 0x02014b50) {
+    throw new Error("ZIP file header 형식이 올바르지 않습니다.");
+  }
+
+  const compressionMethod = zipBuffer.readUInt16LE(centralDirectoryOffset + 10);
+  const compressedSize = zipBuffer.readUInt32LE(centralDirectoryOffset + 20);
+  const fileNameLength = zipBuffer.readUInt16LE(centralDirectoryOffset + 28);
+  const extraFieldLength = zipBuffer.readUInt16LE(centralDirectoryOffset + 30);
+  const commentLength = zipBuffer.readUInt16LE(centralDirectoryOffset + 32);
+  const localHeaderOffset = zipBuffer.readUInt32LE(centralDirectoryOffset + 42);
+  const fileName = zipBuffer
+    .subarray(centralDirectoryOffset + 46, centralDirectoryOffset + 46 + fileNameLength)
+    .toString("utf8");
+
+  if (!fileName.endsWith(".csv")) {
+    throw new Error("ZIP 내부 CSV 파일을 찾을 수 없습니다.");
+  }
+
+  const nextCentralHeader =
+    centralDirectoryOffset + 46 + fileNameLength + extraFieldLength + commentLength;
+  if (nextCentralHeader > zipBuffer.length) {
+    throw new Error("ZIP central directory 길이가 올바르지 않습니다.");
+  }
+
+  const localFileNameLength = zipBuffer.readUInt16LE(localHeaderOffset + 26);
+  const localExtraFieldLength = zipBuffer.readUInt16LE(localHeaderOffset + 28);
+  const dataStart = localHeaderOffset + 30 + localFileNameLength + localExtraFieldLength;
+  const compressedData = zipBuffer.subarray(dataStart, dataStart + compressedSize);
+
+  if (compressionMethod === 0) {
+    return compressedData.toString("utf8");
+  }
+
+  if (compressionMethod === 8) {
+    return inflateRawSync(compressedData).toString("utf8");
+  }
+
+  throw new Error(`지원하지 않는 ZIP 압축 방식입니다: ${compressionMethod}`);
+};
+
+const parseHistoricalCandles = (csv: string): HistoricalCandle[] => {
+  const [headerLine, ...rows] = csv.trim().split(/\r?\n/);
+  const headers = headerLine.split(",");
+
+  const column = (name: string) => {
+    const index = headers.indexOf(name);
+    if (index < 0) {
+      throw new Error(`CSV 컬럼이 누락되었습니다: ${name}`);
+    }
+    return index;
+  };
+
+  const dateIndex = column("date_time_utc");
+  const openIndex = column("open");
+  const highIndex = column("high");
+  const lowIndex = column("low");
+  const closeIndex = column("close");
+  const volumeIndex = column("acc_trade_volume");
+
+  return rows
+    .map((row) => row.split(","))
+    .filter((values) => values.length >= headers.length)
+    .map((values) => ({
+      candle_date_time_kst: toKstDateTime(values[dateIndex]),
+      opening_price: Number(values[openIndex]),
+      high_price: Number(values[highIndex]),
+      low_price: Number(values[lowIndex]),
+      trade_price: Number(values[closeIndex]),
+      candle_acc_trade_volume: Number(values[volumeIndex]),
+    }))
+    .filter(
+      (candle) =>
+        Number.isFinite(candle.opening_price) &&
+        Number.isFinite(candle.high_price) &&
+        Number.isFinite(candle.low_price) &&
+        Number.isFinite(candle.trade_price) &&
+        Number.isFinite(candle.candle_acc_trade_volume)
+    );
+};
+
+const fetchHistoricalJson = async <T>(url: string): Promise<T> => {
+  const response = await fetch(url, {
+    headers: {
+      Accept: "application/json",
+      "User-Agent": "Coment/1.0 historical-market-proxy",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Upbit historical API 오류: ${response.status}`);
+  }
+
+  return (await response.json()) as T;
+};
+
+const fetchHistoricalZipCsv = async (key: string) => {
+  const response = await fetch(`${UPBIT_HISTORICAL_DOWNLOAD_HOST}/${key}`, {
+    headers: {
+      Accept: "application/zip",
+      "User-Agent": "Coment/1.0 historical-market-proxy",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Upbit historical ZIP 다운로드 오류: ${response.status}`);
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  return unzipSingleCsv(Buffer.from(arrayBuffer));
+};
+
+const listBtcHistoricalFiles = async (
+  timeframe: HistoricalTimeframe,
+  year: number
+): Promise<UpbitHistoricalFile[]> => {
+  const interval = SUPPORTED_HISTORICAL_TIMEFRAMES[timeframe].path;
+  const prefix = `candle/KRW-BTC/daily/${interval}/${year}`;
+  const url = `${UPBIT_HISTORICAL_LISTING_ENDPOINT}?prefix=${encodeURIComponent(prefix)}`;
+  return fetchHistoricalJson<UpbitHistoricalFile[]>(url);
+};
+
+// ─── Function 0: GET /upbitHistoricalCandles ────────────────────────────────
+export const upbitHistoricalCandles = onRequest(
+  { cors: true, timeoutSeconds: 60, memory: "256MiB" },
+  async (req, res) => {
+    if (req.method !== "GET") {
+      res.status(405).json({ success: false, error: "GET 메서드만 허용됩니다." });
+      return;
+    }
+
+    const timeframe = req.query.timeframe;
+    if (!isHistoricalTimeframe(timeframe)) {
+      res.status(400).json({
+        success: false,
+        error: "timeframe은 1m, 30m, 1h, 4h, 1d 중 하나여야 합니다.",
+      });
+      return;
+    }
+
+    const limit = Math.min(Math.max(Number(req.query.limit ?? 80), 1), 240);
+    const currentYear = new Date().getUTCFullYear();
+    const rowsPerFile = SUPPORTED_HISTORICAL_TIMEFRAMES[timeframe].rowsPerDailyFile;
+    const fileCount = Math.min(Math.ceil(limit / rowsPerFile) + 1, timeframe === "1d" ? 120 : 14);
+
+    try {
+      const filesByYear = await Promise.all([
+        listBtcHistoricalFiles(timeframe, currentYear),
+        listBtcHistoricalFiles(timeframe, currentYear - 1),
+      ]);
+
+      const zipFiles = filesByYear
+        .flat()
+        .filter((file) => file.type === "FILE" && file.key.endsWith(".zip"))
+        .sort((a, b) => a.key.localeCompare(b.key))
+        .slice(-fileCount);
+
+      const csvFiles = await Promise.all(zipFiles.map((file) => fetchHistoricalZipCsv(file.key)));
+      const candles = csvFiles
+        .flatMap(parseHistoricalCandles)
+        .sort((a, b) => a.candle_date_time_kst.localeCompare(b.candle_date_time_kst))
+        .slice(-limit);
+
+      res.status(200).json({
+        success: true,
+        market: "KRW-BTC",
+        timeframe,
+        source: "upbit-historical-market-data",
+        files: zipFiles.map((file) => file.key),
+        candles,
+      });
+    } catch (error) {
+      console.error("upbitHistoricalCandles 오류:", error);
+      res.status(502).json({
+        success: false,
+        error: "Upbit 과거 캔들 데이터를 불러오지 못했습니다.",
+      });
+    }
+  }
+);
 
 // ─── Claude API 공통 호출 함수 ────────────────────────────────────────────────
 const callClaude = async (
