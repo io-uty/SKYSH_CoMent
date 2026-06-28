@@ -71,3 +71,4 @@ dist/
 
 # dataconnect generated files
 .dataconnect
+.env.local
