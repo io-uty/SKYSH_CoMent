@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import Onboarding, { type OnboardingResult } from "./Onboarding";
 import { seedAlerts, seedMentors, seedSignals } from "./data/seed";
-import { firestore, subscribeToCollection } from "./lib/firebase";
+import { firestore, getSessionUserId, saveOnboardingResult, subscribeToCollection } from "./lib/firebase";
 import type { CoachingAlert, MarketSignal, Mentor, MentorPattern } from "./types";
 
 const fallbackChartBars = [
@@ -394,6 +394,16 @@ function App() {
     setChatMessages([]);
     setChatDraft("");
     setHasCompletedOnboarding(true);
+
+    // Firestore 저장 (비동기, 화면 전환과 무관하게 백그라운드에서 실행)
+    saveOnboardingResult({
+      userId: getSessionUserId(),
+      pattern: result.pattern,
+      investorType: result.type,
+      scores: result.scores,
+      answers: result.answers,
+      matchedMentorId: matchedMentor.id,
+    }).catch((error) => console.error("온보딩 저장 실패:", error));
   };
 
   const baseChatMessages: ChatMessage[] = [
