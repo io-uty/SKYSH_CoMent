@@ -601,19 +601,24 @@ export const chatWithMentor = onRequest({ cors: true, secrets: ["ANTHROPIC_API_K
 
 // ─── 프롬프트 4: 멘토 메시지 정제(모니터링) ──────────────────────────────────
 const REFINE_SYSTEM_PROMPT = `
-너는 금융 및 코인 시장의 공정한 모니터링 AI야. 멘토가 작성한 투자 정보 메시지를 분석해서 다음 규칙에 따라 정제해줘.
+너는 금융 및 코인 시장의 공정한 모니터링 AI야. 멘토가 작성한 투자 정보 메시지를 분석해서, 가능하면 차단하지 말고 위험한 표현만 순화·삭제해서 멘티에게 전달되도록 정제해줘.
 
-[규칙]
-1. 객관성 유지: 과장·단정·선동적 표현을 객관적이고 중립적인 표현으로 다듬어줘. 사실과 의견을 구분하고, 근거 없는 확정적 예측은 완화해줘.
-2. 위험 내용 필터링: 수익 보장("100% 수익", "무조건 오른다"), 단정적 매수·매도 지시("지금 사세요", "풀매수"), 외부 채널·리딩방 유도, 입금·송금 유도, 허위 정보가 포함되면 status를 "rejected"로 하고 reason에 사유를 적어줘.
-3. 안전하다면 status를 "approved"로 하고, refinedContent에 객관적으로 정제된 메시지를 담아줘. 원문의 핵심 정보와 의도는 유지하되 표현만 다듬어줘.
+[3단계 판단 규칙]
+1. approved (안전): 과장·단정·선동 표현이 없는 객관적인 메시지. refinedContent에 원문을 거의 그대로(필요하면 가벼운 표현만 다듬어) 담아줘. warning은 빈 문자열.
+2. warned (순화 후 전달): 위험하거나 과한 표현이 있지만 핵심 정보는 살릴 수 있는 경우.
+   - 수익 보장·확정적 예측("100% 수익", "무조건 오른다"), 단정적 매수·매도 지시("지금 사세요", "풀매수"), 과도한 선동·공포 조장 표현을 → 중립적이고 객관적인 표현으로 바꾸거나, 바꿀 수 없으면 해당 부분을 삭제해줘.
+   - refinedContent에 순화된 본문을 담고, warning에 멘티가 주의하도록 짧은 경고문(예: "투자 권유가 아닌 참고용 정보이며, 투자 판단과 책임은 본인에게 있습니다.")을 담아줘.
+3. rejected (차단): 메시지 전체가 극단적 위반인 경우에만 차단해. 외부 채널·리딩방 유도, 입금·송금 유도, 명백한 사기·허위 정보가 핵심인 메시지. 이때 reason에 차단 사유를 적어줘.
+
+가능한 한 rejected 대신 warned 로 살려서 전달하는 것을 우선해. 정제 시 원문의 핵심 정보와 의도는 유지하고 표현만 객관화해줘.
 
 [응답 포맷]
 반드시 JSON으로만 답해줘. 코드 블록이나 다른 텍스트 없이 순수 JSON만 출력해.
 {
-  "status": "approved" | "rejected",
-  "refinedContent": "정제된 내용",
-  "reason": "rejected 되었을 때의 사유"
+  "status": "approved" | "warned" | "rejected",
+  "refinedContent": "정제된 내용 (approved/warned 일 때)",
+  "warning": "warned 일 때 멘티에게 보여줄 경고문 (아니면 빈 문자열)",
+  "reason": "rejected 되었을 때의 사유 (아니면 빈 문자열)"
 }
 `.trim();
 
@@ -650,8 +655,9 @@ export const refineMentorPost = onRequest(
     try {
       const raw = await callClaude(REFINE_SYSTEM_PROMPT, message.trim());
       const parsed = JSON.parse(extractJson(raw)) as {
-        status: "approved" | "rejected";
+        status: "approved" | "warned" | "rejected";
         refinedContent: string;
+        warning: string;
         reason: string;
       };
 
@@ -659,6 +665,7 @@ export const refineMentorPost = onRequest(
         success: true,
         status: parsed.status,
         refinedContent: parsed.refinedContent ?? "",
+        warning: parsed.warning ?? "",
         reason: parsed.reason ?? "",
       });
     } catch (error) {

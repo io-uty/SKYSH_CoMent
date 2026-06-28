@@ -1,15 +1,17 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Onboarding, { type OnboardingResult } from "./Onboarding";
 import { seedAlerts, seedMentors, seedSignals } from "./data/seed";
 import {
   appendChatMessage,
+  buildChatId,
   firestore,
-  getRoomId,
   getSessionUserId,
   saveOnboardingResult,
   seedChatIfEmpty,
+  setActiveRoom,
   subscribeToChatMessages,
   subscribeToCollection,
+  updateChatRoomMeta,
 } from "./lib/firebase";
 import type { CoachingAlert, MarketSignal, Mentor, MentorPattern } from "./types";
 
@@ -330,6 +332,8 @@ function App() {
   const [investmentPrinciples, setInvestmentPrinciples] = useState(defaultInvestmentPrinciples);
   const [principleDrafts, setPrincipleDrafts] = useState(defaultInvestmentPrinciples);
   const [isEditingPrinciples, setIsEditingPrinciples] = useState(false);
+  const [menteeName] = useState("김준혁");
+  const chatThreadRef = useRef<HTMLDivElement>(null);
 
   const activeTimeframeConfig =
     marketTimeframes.find((timeframe) => timeframe.id === activeTimeframe) ?? marketTimeframes[1];
@@ -455,6 +459,13 @@ function App() {
   const selectedMentor = useMemo(
     () => mentors.find((mentor) => mentor.id === selectedMentorId) ?? mentors[0],
     [mentors, selectedMentorId],
+  );
+
+  // 멘티 userId + 선택한 멘토 id 로 방을 구분한다.
+  // → 다른 멘토를 선택하면 chatId 가 바뀌어 새 채팅방이 시작된다.
+  const chatId = useMemo(
+    () => buildChatId(getSessionUserId(), selectedMentor.id),
+    [selectedMentor.id],
   );
 
   const recommendedMentors = useMemo(
@@ -638,7 +649,10 @@ function App() {
     }
 
     const userId = getSessionUserId();
-    const chatId = getRoomId();
+    // 멘토를 바꾸면 이전 방 메시지가 잠깐 남지 않도록 즉시 비운다.
+    setChatMessages([]);
+    // 채팅이 열려 있는 동안 활성 방을 계속 동기화 (멘토 탭 자동 추종).
+    setActiveRoom(chatId);
     let unsubscribe = () => undefined as void;
     let isActive = true;
 
@@ -654,6 +668,12 @@ function App() {
             warning: message.warning,
           })),
         );
+        // 방 이름 메타를 항상 최신화 → 멘토 콘솔이 같은 이름을 실시간으로 본다.
+        await updateChatRoomMeta(chatId, {
+          mentorName: selectedMentor.name,
+          mentorAccent: selectedMentor.accent,
+          menteeName,
+        });
       } catch (error) {
         console.error("채팅 시드 실패:", error);
       }
@@ -675,21 +695,32 @@ function App() {
     };
     // baseChatMessages 는 정적 콘텐츠라 의존성에서 제외한다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isChatOpen, selectedMentor.id]);
+  }, [isChatOpen, chatId, selectedMentor.name, selectedMentor.accent, menteeName]);
 
-  // 채팅창을 열 때 URL 에 ?room= 을 즉시 부착한다.
-  // 멘토가 같은 링크의 ?room= 값으로 접속하면 동일한 방을 보게 된다.
+  // 새 메시지가 도착하면 항상 맨 아래로 스크롤한다.
+  useEffect(() => {
+    if (!isChatOpen) {
+      return;
+    }
+    const thread = chatThreadRef.current;
+    if (thread) {
+      thread.scrollTo({ top: thread.scrollHeight, behavior: "smooth" });
+    }
+  }, [chatMessages, isChatOpen, isMentorTyping]);
+
+  // 채팅창을 열 때 URL 에 현재 방을 부착하고, 활성 방 포인터도 갱신한다.
+  // 멘토 탭(같은 브라우저)은 이 포인터를 감지해 같은 방을 자동으로 따라온다.
   const openMenteeChat = () => {
-    const roomId = getRoomId();
     const params = new URLSearchParams(window.location.search);
-    if (params.get("room") !== roomId) {
-      params.set("room", roomId);
+    if (params.get("room") !== chatId) {
+      params.set("room", chatId);
       window.history.replaceState(
         null,
         "",
         `${window.location.pathname}?${params.toString()}`,
       );
     }
+    setActiveRoom(chatId);
     setIsChatOpen(true);
   };
 
@@ -708,7 +739,7 @@ function App() {
     // 멘토 화면(Mentor)의 리스너가 즉시 받아 보고 직접 답장한다(티키타카).
     if (firestore) {
       try {
-        await appendChatMessage(getRoomId(), {
+        await appendChatMessage(chatId, {
           author: "mentee",
           body: trimmedMessage,
           time,
@@ -777,7 +808,7 @@ function App() {
 
         <div className="profile-card">
           <span className="profile-label">Mentee</span>
-          <strong>김준혁</strong>
+          <strong>{menteeName}</strong>
           <p>{subscribedPlan ? `${subscribedPlan.name} 구독` : "온보딩 완료 · 매칭 대기"}</p>
           <div>
             <span>{patternProfiles[menteePattern].label}</span>
@@ -1492,7 +1523,7 @@ function App() {
               </button>
             </div>
 
-            <div className="chat-thread">
+            <div className="chat-thread" ref={chatThreadRef}>
               {(firestore ? chatMessages : [...baseChatMessages, ...chatMessages]).map((message) => (
                 <div className={`chat-bubble ${message.author}`} key={message.id}>
                   <p>{message.body}</p>

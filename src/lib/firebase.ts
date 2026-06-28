@@ -122,8 +122,9 @@ export async function callMentorChat(payload: MentorChatPayload): Promise<string
 // 멘토가 작성한 메시지를 백엔드 AI 로 보내 객관성 검수/정제한다.
 // approved 면 refinedContent 를 멘티에게 전달하고, rejected 면 reason 으로 차단한다.
 export type RefineResult = {
-  status: "approved" | "rejected";
+  status: "approved" | "warned" | "rejected";
   refinedContent: string;
+  warning: string;
   reason: string;
 };
 
@@ -140,8 +141,9 @@ export async function refineMentorMessage(message: string): Promise<RefineResult
 
   const data = (await response.json()) as {
     success: boolean;
-    status?: "approved" | "rejected";
+    status?: "approved" | "warned" | "rejected";
     refinedContent?: string;
+    warning?: string;
     reason?: string;
     error?: string;
   };
@@ -153,6 +155,7 @@ export async function refineMentorMessage(message: string): Promise<RefineResult
   return {
     status: data.status,
     refinedContent: data.refinedContent ?? "",
+    warning: data.warning ?? "",
     reason: data.reason ?? "",
   };
 }
@@ -186,6 +189,89 @@ export function getRoomId(): string {
     }
   }
   return DEFAULT_CHAT_ROOM;
+}
+
+// ─── 활성 방 포인터 (멘티 ↔ 멘토 탭 자동 연동) ──────────────────────────────
+// 멘티가 채팅을 열거나 멘토를 바꾸면 현재 방 ID 를 localStorage 에 기록한다.
+// 같은 브라우저의 멘토 탭은 storage 이벤트로 이를 감지해 같은 방을 자동 추종한다.
+const ACTIVE_ROOM_KEY = "coment_active_room";
+
+export function setActiveRoom(roomId: string): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    localStorage.setItem(ACTIVE_ROOM_KEY, roomId);
+  } catch {
+    /* localStorage 접근 불가 시 무시 */
+  }
+}
+
+export function getActiveRoom(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    return localStorage.getItem(ACTIVE_ROOM_KEY);
+  } catch {
+    return null;
+  }
+}
+
+// 멘토 콘솔이 구독할 방 결정: URL ?room= → 멘티가 마지막으로 연 방 → 기본 공유 방.
+export function resolveMentorRoomId(): string {
+  if (typeof window !== "undefined") {
+    const room = new URLSearchParams(window.location.search).get("room");
+    if (room) {
+      return room;
+    }
+  }
+  return getActiveRoom() ?? DEFAULT_CHAT_ROOM;
+}
+
+// ─── 채팅방 메타데이터 (멘토/멘티 이름 실시간 동기화) ────────────────────────
+export type ChatRoomMeta = {
+  mentorName?: string;
+  mentorAccent?: string;
+  menteeName?: string;
+};
+
+export async function updateChatRoomMeta(chatId: string, meta: ChatRoomMeta): Promise<void> {
+  if (!firestore) {
+    return;
+  }
+  const payload: Record<string, unknown> = { updated_at: serverTimestamp() };
+  if (meta.mentorName !== undefined) payload.mentor_name = meta.mentorName;
+  if (meta.mentorAccent !== undefined) payload.mentor_accent = meta.mentorAccent;
+  if (meta.menteeName !== undefined) payload.mentee_name = meta.menteeName;
+  await setDoc(doc(firestore, "chats", chatId), payload, { merge: true });
+}
+
+export function subscribeToChatRoomMeta(
+  chatId: string,
+  setMeta: (meta: ChatRoomMeta) => void,
+): () => void {
+  if (!firestore) {
+    return () => undefined;
+  }
+  return onSnapshot(
+    doc(firestore, "chats", chatId),
+    (snapshot) => {
+      const data = snapshot.data();
+      if (!data) {
+        setMeta({});
+        return;
+      }
+      setMeta({
+        mentorName: data.mentor_name,
+        mentorAccent: data.mentor_accent,
+        menteeName: data.mentee_name,
+      });
+    },
+    (error) => {
+      console.error("채팅방 메타 구독 오류:", error);
+    },
+  );
 }
 
 // 채팅 메시지 실시간 구독 (onSnapshot 리스너)
