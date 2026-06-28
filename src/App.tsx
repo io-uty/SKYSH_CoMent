@@ -226,7 +226,7 @@ const [buyStreak, setBuyStreak] = useState(0); // 초기값 0
   const [marketUpdatedAt, setMarketUpdatedAt] = useState("Seed data");
   const [isMarketFallback, setIsMarketFallback] = useState(true);
   const [activeTimeframe, setActiveTimeframe] = useState<MarketTimeframe>("30m");
-  const replayEvents = [
+ const replayEvents = [
   { time: "10:32", label: "급락 시작", type: "event" },
   { time: "10:34", label: "뉴스 검색", type: "action" },
   { time: "10:36", label: "공포 투매", type: "event" },
@@ -751,42 +751,40 @@ const riskIndex = useMemo(() => {
                   </div>
                 </div>
 
-               <div className="chart-insight-strip">
-  {/* Emotion Replay 타임라인 카드 */}
+              
+ <div className="chart-insight-strip">
   <div className="replay-card" style={{ flex: 2, padding: "20px", position: "relative" }}>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "25px" }}>
       <span style={{ fontSize: "12px", fontWeight: "bold", color: "#d4ed31", textTransform: "uppercase" }}>Emotion Replay</span>
-      <p style={{ margin: 0, fontSize: "13px", color: "#ccc" }}>"당신은 급락 후 평균 5분 안에 매도하는 패턴이 있습니다."</p>
+      <p style={{ margin: 0, fontSize: "13px", color: "#f30b0b" }}>"당신은 급락 후 평균 5분 안에 매도하는 패턴이 있습니다."</p>
     </div>
 
-    {/* 타임라인 실선 및 아이템 */}
     <div style={{ position: "relative", padding: "0 10px", marginTop: "40px" }}>
-      {/* 가로 중심선 */}
-      <div style={{ position: "absolute", top: "6px", left: "0", right: "0", height: "1px", background: "rgba(255,255,255,0.2)" }} />
+      <div style={{ position: "absolute", top: "6px", left: "25px", right: "25px", height: "1px", background: "rgba(255,255,255,0.2)" }} />
       
       <div style={{ display: "flex", justifyContent: "space-between", position: "relative" }}>
+        {/* 이제 replayEvents가 정의되어 있으므로 빨간 줄이 뜨지 않습니다 */}
         {replayEvents.map((event, i) => (
-          <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", width: "60px" }}>
-            {/* 타임라인 점 */}
+          <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", width: "70px" }}>
             <div style={{ 
               width: "12px", 
               height: "12px", 
-              backgroundColor: event.type === "event" ? "#d4ed31" : "#31aed4", 
+              backgroundColor: event.type === "event" ? "#99dd0f" : "#31aed4", 
               borderRadius: "50%", 
               boxShadow: "0 0 10px rgba(212, 237, 49, 0.5)",
               zIndex: 2,
               marginBottom: "15px"
             }} />
-            {/* 시간표시 (점 위로 올리고 싶으면 order를 조정하거나 위쪽에 배치 가능) */}
-            <span style={{ fontSize: "11px", color: "#fff", fontWeight: "bold" }}>{event.time}</span>
-            {/* 라벨표시 */}
-            <span style={{ fontSize: "11px", color: "#888", marginTop: "4px", whiteSpace: "nowrap" }}>{event.label}</span>
+            <span style={{ fontSize: "11px", color: "#0318f5", fontWeight: "bold" }}>{event.time}</span>
+            <span style={{ fontSize: "10px", color: "#888", marginTop: "4px", whiteSpace: "nowrap" }}>{event.label}</span>
           </div>
         ))}
       </div>
     </div>
-  </div>
-
+  
+  
+  {/* 기존 Upbit Sync 카드 영역은 그대로 두시면 됩니다 */}
+</div>
   <div className="upbit-sync-card" style={{ flex: 1 }}>
     <span>Upbit Sync</span>
     <strong>BTC/KRW {activeTimeframeConfig.candleLabel}</strong>
