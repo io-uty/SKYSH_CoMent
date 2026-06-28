@@ -1,9 +1,122 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import Onboarding, { type OnboardingResult } from "./Onboarding";
 import { seedAlerts, seedMentors, seedSignals } from "./data/seed";
 import { firestore, subscribeToCollection } from "./lib/firebase";
 import type { CoachingAlert, MarketSignal, Mentor, MentorPattern } from "./types";
 
-const chartBars = [46, 58, 72, 65, 38, 28, 42, 64, 55, 31, 25, 48, 79, 70, 44, 36, 52, 83];
+const fallbackChartBars = [
+  46, 58, 72, 65, 38, 28, 42, 64, 55, 31, 25, 48, 79, 70, 44, 36, 52, 83,
+];
+
+const upbitTickerEndpoint = "https://api.upbit.com/v1/ticker?markets=KRW-BTC";
+const marketRefreshMs = 10000;
+const marketTimeframes = [
+  {
+    id: "1m",
+    label: "1분",
+    candleLabel: "1분봉",
+    endpoint: "https://api.upbit.com/v1/candles/minutes/1?market=KRW-BTC&count=40",
+  },
+  {
+    id: "30m",
+    label: "30분",
+    candleLabel: "30분봉",
+    endpoint: "https://api.upbit.com/v1/candles/minutes/30?market=KRW-BTC&count=40",
+  },
+  {
+    id: "1h",
+    label: "1시간",
+    candleLabel: "1시간봉",
+    endpoint: "https://api.upbit.com/v1/candles/minutes/60?market=KRW-BTC&count=40",
+  },
+  {
+    id: "4h",
+    label: "4시간",
+    candleLabel: "4시간봉",
+    endpoint: "https://api.upbit.com/v1/candles/minutes/240?market=KRW-BTC&count=40",
+  },
+  {
+    id: "1d",
+    label: "1일",
+    candleLabel: "1일봉",
+    endpoint: "https://api.upbit.com/v1/candles/days?market=KRW-BTC&count=40",
+  },
+] as const;
+
+type MarketTimeframe = (typeof marketTimeframes)[number]["id"];
+
+type UpbitTicker = {
+  trade_price: number;
+  signed_change_rate: number;
+  signed_change_price: number;
+};
+
+type UpbitCandle = {
+  candle_date_time_kst: string;
+  opening_price: number;
+  high_price: number;
+  low_price: number;
+  trade_price: number;
+  candle_acc_trade_volume: number;
+};
+
+type ChartCandle = {
+  id: string;
+  bodyBottom: number;
+  bodyHeight: number;
+  wickTop: number;
+  wickBottom: number;
+  direction: "up" | "down";
+  close: number;
+};
+
+const fallbackTicker: UpbitTicker = {
+  trade_price: 91875000,
+  signed_change_rate: 0.0078,
+  signed_change_price: 710000,
+};
+
+const fallbackCandles: UpbitCandle[] = fallbackChartBars.map((height, index) => {
+  const openingPrice = 91400000 + index * 85000 + (index % 4) * 120000;
+  const bodySize = height * 7200;
+  const tradePrice = index % 3 === 0 ? openingPrice - bodySize : openingPrice + bodySize;
+  const highPrice = Math.max(openingPrice, tradePrice) + 230000 + (index % 3) * 55000;
+  const lowPrice = Math.min(openingPrice, tradePrice) - 210000 - (index % 5) * 45000;
+
+  return {
+    candle_date_time_kst: `seed-${index}`,
+    opening_price: openingPrice,
+    high_price: highPrice,
+    low_price: lowPrice,
+    trade_price: tradePrice,
+    candle_acc_trade_volume: 120 + index * 8,
+  };
+});
+
+function toChartCandles(candles: UpbitCandle[]) {
+  const orderedCandles = [...candles].reverse();
+  const minLow = Math.min(...orderedCandles.map((candle) => candle.low_price));
+  const maxHigh = Math.max(...orderedCandles.map((candle) => candle.high_price));
+  const priceRange = Math.max(maxHigh - minLow, 1);
+
+  return orderedCandles.map((candle) => {
+    const bodyHigh = Math.max(candle.opening_price, candle.trade_price);
+    const bodyLow = Math.min(candle.opening_price, candle.trade_price);
+    const rawBodyHeight = ((bodyHigh - bodyLow) / priceRange) * 100;
+
+    return {
+      id: candle.candle_date_time_kst,
+      bodyBottom: ((bodyLow - minLow) / priceRange) * 100,
+      bodyHeight: Math.max(rawBodyHeight, 2.4),
+      wickTop: ((candle.high_price - bodyHigh) / priceRange) * 100,
+      wickBottom: ((bodyLow - candle.low_price) / priceRange) * 100,
+      direction: candle.trade_price >= candle.opening_price ? "up" : "down",
+      close: candle.trade_price,
+    } satisfies ChartCandle;
+  });
+}
+
+const fallbackChartCandles = toChartCandles(fallbackCandles);
 
 const appViews = [
   { id: "match", label: "멘토 매칭", icon: "◇" },
@@ -90,20 +203,84 @@ function App() {
   const mentors = seedMentors;
   const [signals, setSignals] = useState<MarketSignal[]>(seedSignals);
   const [alerts, setAlerts] = useState<CoachingAlert[]>(seedAlerts);
+  const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false);
   const [menteePattern, setMenteePattern] = useState<MentorPattern>("neutral");
   const [selectedMentorId, setSelectedMentorId] = useState(
     seedMentors.find((mentor) => mentor.pattern === "neutral")?.id ?? seedMentors[0].id,
   );
   const [activeView, setActiveView] = useState<AppView>("match");
+  const [portfolioMentor, setPortfolioMentor] = useState<Mentor | null>(null);
   const [pendingMentor, setPendingMentor] = useState<Mentor | null>(null);
   const [selectedPlanId, setSelectedPlanId] = useState<string>(subscriptionPlans[1].id);
   const [subscribedPlan, setSubscribedPlan] = useState<SubscriptionPlan | null>(null);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [chatDraft, setChatDraft] = useState("");
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [ticker, setTicker] = useState<UpbitTicker>(fallbackTicker);
+  const [chartCandles, setChartCandles] = useState<ChartCandle[]>(fallbackChartCandles);
+  const [marketUpdatedAt, setMarketUpdatedAt] = useState("Seed data");
+  const [isMarketFallback, setIsMarketFallback] = useState(true);
+  const [activeTimeframe, setActiveTimeframe] = useState<MarketTimeframe>("30m");
+
+  const activeTimeframeConfig =
+    marketTimeframes.find((timeframe) => timeframe.id === activeTimeframe) ?? marketTimeframes[1];
 
   useEffect(() => subscribeToCollection("signals", seedSignals, setSignals), []);
   useEffect(() => subscribeToCollection("alerts", seedAlerts, setAlerts), []);
+  useEffect(() => {
+    let isCancelled = false;
+
+    const loadUpbitMarket = async () => {
+      try {
+        const [tickerResponse, candleResponse] = await Promise.all([
+          fetch(upbitTickerEndpoint),
+          fetch(activeTimeframeConfig.endpoint),
+        ]);
+
+        if (!tickerResponse.ok || !candleResponse.ok) {
+          throw new Error("Upbit API request failed");
+        }
+
+        const tickerData = (await tickerResponse.json()) as UpbitTicker[];
+        const candleData = (await candleResponse.json()) as UpbitCandle[];
+        const nextTicker = tickerData[0];
+
+        if (!nextTicker || candleData.length === 0) {
+          throw new Error("Upbit API returned empty market data");
+        }
+
+        if (!isCancelled) {
+          setTicker(nextTicker);
+          setChartCandles(toChartCandles(candleData));
+          setMarketUpdatedAt(
+            new Intl.DateTimeFormat("ko-KR", {
+              hour: "2-digit",
+              minute: "2-digit",
+              second: "2-digit",
+            }).format(new Date()),
+          );
+          setIsMarketFallback(false);
+        }
+      } catch {
+        if (!isCancelled) {
+          setTicker((previousTicker) => previousTicker ?? fallbackTicker);
+          setChartCandles((previousCandles) =>
+            previousCandles.length > 0 ? previousCandles : fallbackChartCandles,
+          );
+          setMarketUpdatedAt("Seed data");
+          setIsMarketFallback(true);
+        }
+      }
+    };
+
+    loadUpbitMarket();
+    const intervalId = window.setInterval(loadUpbitMarket, marketRefreshMs);
+
+    return () => {
+      isCancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [activeTimeframeConfig.endpoint]);
 
   const selectedMentor = useMemo(
     () => mentors.find((mentor) => mentor.id === selectedMentorId) ?? mentors[0],
@@ -132,7 +309,23 @@ function App() {
 
   const selectedPlan =
     subscriptionPlans.find((plan) => plan.id === selectedPlanId) ?? subscriptionPlans[1];
-  const hotSignal = signals.find((signal) => signal.riskLabel === "FOMO") ?? signals[0];
+  const marketPrice = Math.round(ticker.trade_price);
+  const marketChangeRate = ticker.signed_change_rate * 100;
+  const marketChangePrice = Math.round(ticker.signed_change_price);
+  const marketDirection = marketChangeRate >= 0 ? "rise" : "fall";
+  const marketChangeText = `${marketChangeRate >= 0 ? "+" : ""}${marketChangeRate.toFixed(2)}% ${
+    marketChangePrice >= 0 ? "▲" : "▼"
+  } ${formatCurrency(Math.abs(marketChangePrice))} KRW`;
+  const displaySignals = useMemo(
+    () =>
+      signals.map((signal) =>
+        signal.symbol === "BTC"
+          ? { ...signal, price: marketPrice, changeRate: marketChangeRate }
+          : signal,
+      ),
+    [marketChangeRate, marketPrice, signals],
+  );
+  const hotSignal = displaySignals.find((signal) => signal.riskLabel === "FOMO") ?? displaySignals[0];
   const mirrorAlert = alerts.find((alert) => alert.id === "mirror") ?? alerts[0];
   const fomoAlert = alerts.find((alert) => alert.id === "fomo") ?? alerts[0];
   const patternProfile = patternProfiles[menteePattern];
@@ -155,7 +348,12 @@ function App() {
     },
   } satisfies Record<AppView, { eyebrow: string; title: string; search: string }>;
 
+  const openPortfolio = (mentor: Mentor) => {
+    setPortfolioMentor(mentor);
+  };
+
   const openPlan = (mentor: Mentor) => {
+    setPortfolioMentor(null);
     setPendingMentor(mentor);
     setSelectedPlanId(subscriptionPlans[1].id);
   };
@@ -169,6 +367,33 @@ function App() {
     setSubscribedPlan(selectedPlan);
     setPendingMentor(null);
     setActiveView("coach");
+  };
+
+  const returnToPortfolio = () => {
+    if (!pendingMentor) {
+      return;
+    }
+
+    setPortfolioMentor(pendingMentor);
+    setPendingMentor(null);
+  };
+
+  const handleOnboardingComplete = (result: OnboardingResult) => {
+    const matchedMentor =
+      mentors
+        .filter((mentor) => mentor.pattern === result.pattern)
+        .sort((a, b) => b.matchScore - a.matchScore)[0] ?? mentors[0];
+
+    setMenteePattern(result.pattern);
+    setSelectedMentorId(matchedMentor.id);
+    setActiveView("match");
+    setPortfolioMentor(null);
+    setPendingMentor(null);
+    setSubscribedPlan(null);
+    setIsChatOpen(false);
+    setChatMessages([]);
+    setChatDraft("");
+    setHasCompletedOnboarding(true);
   };
 
   const baseChatMessages: ChatMessage[] = [
@@ -211,13 +436,17 @@ function App() {
     setChatDraft("");
   };
 
+  if (!hasCompletedOnboarding) {
+    return <Onboarding onComplete={handleOnboardingComplete} />;
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand-panel">
           <div className="brand-mark">C</div>
           <div>
-            <span>Coment</sgipan>
+            <span>Coment</span>
             <strong>코인 멘토링 앱</strong>
           </div>
         </div>
@@ -326,7 +555,7 @@ function App() {
 
             <section className="recommend-grid">
               {recommendedMentors.map((mentor) => (
-                <button className="mentor-card" key={mentor.id} onClick={() => openPlan(mentor)}>
+                <button className="mentor-card" key={mentor.id} onClick={() => openPortfolio(mentor)}>
                   <div className="mentor-card-top">
                     <span className="mentor-avatar" style={{ backgroundColor: mentor.accent }}>
                       {mentor.name.slice(0, 1)}
@@ -366,7 +595,7 @@ function App() {
 
               <div className="mentor-list">
                 {sortedMentors.map((mentor) => (
-                  <button className="mentor-list-row" key={mentor.id} onClick={() => openPlan(mentor)}>
+                  <button className="mentor-list-row" key={mentor.id} onClick={() => openPortfolio(mentor)}>
                     <span className="mentor-avatar" style={{ backgroundColor: mentor.accent }}>
                       {mentor.name.slice(0, 1)}
                     </span>
@@ -418,8 +647,10 @@ function App() {
                     <h2>비트코인</h2>
                     <small>BTC/KRW</small>
                   </div>
-                  <strong className="asset-price">91,875,000</strong>
-                  <p className="asset-change">+0.78% ▲ 710,000 KRW</p>
+                  <strong className={`asset-price ${marketDirection}`}>
+                    {formatCurrency(marketPrice)}
+                  </strong>
+                  <p className={`asset-change ${marketDirection}`}>{marketChangeText}</p>
                 </article>
 
                 <article className="mini-card">
@@ -443,23 +674,52 @@ function App() {
                     <button>마켓 인사이트</button>
                   </div>
                   <div className="time-tabs">
-                    <button>1분</button>
-                    <button className="active">30분</button>
-                    <button>1일</button>
+                    {marketTimeframes.map((timeframe) => (
+                      <button
+                        className={activeTimeframe === timeframe.id ? "active" : ""}
+                        key={timeframe.id}
+                        onClick={() => setActiveTimeframe(timeframe.id)}
+                      >
+                        {timeframe.label}
+                      </button>
+                    ))}
                   </div>
+                  <span className={`market-live-pill ${isMarketFallback ? "fallback" : ""}`}>
+                    {isMarketFallback ? "Upbit fallback" : "Upbit live"}
+                    <small>{marketUpdatedAt}</small>
+                  </span>
                 </div>
 
                 <div className="chart-stage">
                   <div className="grid-lines" />
-                  <div className="candle-chart" aria-label="비트코인 캔들 차트">
-                    {chartBars.map((height, index) => (
+                  <div
+                    className="candle-chart"
+                    aria-label={`비트코인 ${activeTimeframeConfig.candleLabel} 캔들 차트`}
+                  >
+                    {chartCandles.map((candle, index) => (
                       <span
-                        className={index % 3 === 0 ? "candle down" : "candle up"}
-                        key={`${height}-${index}`}
-                        style={{ height: `${height}%` }}
+                        className={`candle ${candle.direction}`}
+                        key={`${candle.id}-${index}`}
+                        style={
+                          {
+                            "--wick-bottom": `${candle.wickBottom}%`,
+                            "--wick-top": `${candle.wickTop}%`,
+                            bottom: `${candle.bodyBottom}%`,
+                            height: `${candle.bodyHeight}%`,
+                            left: `${
+                              chartCandles.length > 1
+                                ? (index / (chartCandles.length - 1)) * 100
+                                : 50
+                            }%`,
+                          } as CSSProperties
+                        }
+                        title={`${formatCurrency(Math.round(candle.close))} KRW`}
                       />
                     ))}
                   </div>
+                </div>
+
+                <div className="chart-insight-strip">
                   <div className="replay-card">
                     <span>Emotion Replay</span>
                     <p>급락 후 평균 5분 안에 매도 패턴</p>
@@ -469,6 +729,15 @@ function App() {
                       <i />
                       <i />
                     </div>
+                  </div>
+                  <div className="upbit-sync-card">
+                    <span>Upbit Sync</span>
+                    <strong>BTC/KRW {activeTimeframeConfig.candleLabel}</strong>
+                    <p>
+                      {isMarketFallback
+                        ? "API 연결 실패 시 seed 차트로 화면을 유지합니다."
+                        : `${marketUpdatedAt} 기준 공개 API 데이터가 반영되었습니다.`}
+                    </p>
                   </div>
                 </div>
               </article>
@@ -480,7 +749,7 @@ function App() {
                     <button>누적호가</button>
                     <button>호가주문</button>
                   </div>
-                  {signals.map((signal) => (
+                  {displaySignals.map((signal) => (
                     <div className="order-row" key={signal.id}>
                       <span>{signal.symbol}</span>
                       <strong>{formatCurrency(signal.price)}</strong>
@@ -565,7 +834,7 @@ function App() {
                   <span>{fomoAlert.metric}</span>
                 </div>
                 <div className="coin-list">
-                  {signals.map((signal) => (
+                  {displaySignals.map((signal) => (
                     <button className="coin-row" key={signal.id}>
                       <span>
                         <strong>{signal.koreanName}</strong>
@@ -583,6 +852,100 @@ function App() {
           </main>
         )}
       </div>
+
+      {portfolioMentor ? (
+        <div className="modal-backdrop" onClick={() => setPortfolioMentor(null)}>
+          <section
+            aria-label={`${portfolioMentor.name} 멘토 포트폴리오`}
+            className="portfolio-modal"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+          >
+            <div className="modal-title">
+              <div>
+                <span>Mentor Portfolio</span>
+                <h2>{portfolioMentor.name} 멘토 포트폴리오</h2>
+                <p>{portfolioMentor.headline}</p>
+              </div>
+              <button aria-label="닫기" onClick={() => setPortfolioMentor(null)}>
+                ×
+              </button>
+            </div>
+
+            <div className="portfolio-layout">
+              <section className="portfolio-profile">
+                <div className="matched-mentor-head">
+                  <span className="mentor-avatar large" style={{ backgroundColor: portfolioMentor.accent }}>
+                    {portfolioMentor.name.slice(0, 1)}
+                  </span>
+                  <div>
+                    <strong>{portfolioMentor.name}</strong>
+                    <small>
+                      {patternProfiles[portfolioMentor.pattern].label} · {portfolioMentor.specialty}
+                    </small>
+                  </div>
+                </div>
+                <p>{portfolioMentor.philosophy}</p>
+                <div className="tag-row compact">
+                  {portfolioMentor.tags.map((tag) => (
+                    <i key={tag}>{tag}</i>
+                  ))}
+                </div>
+              </section>
+
+              <section className="portfolio-chart" aria-label={`${portfolioMentor.name} 멘토 수익 곡선`}>
+                <div className="portfolio-chart-line">
+                  <i style={{ height: "30%" }} />
+                  <i style={{ height: "42%" }} />
+                  <i style={{ height: "38%" }} />
+                  <i style={{ height: "55%" }} />
+                  <i style={{ height: "62%" }} />
+                  <i style={{ height: "58%" }} />
+                  <i style={{ height: "74%" }} />
+                  <i style={{ height: "82%" }} />
+                </div>
+                <span>최근 6개월 검증 추이</span>
+              </section>
+            </div>
+
+            <div className="portfolio-stats-grid">
+              <article>
+                <span>검증 수익률</span>
+                <strong>+{portfolioMentor.verifiedReturn.toFixed(1)}%</strong>
+              </article>
+              <article>
+                <span>최대 낙폭</span>
+                <strong>{portfolioMentor.drawdown.toFixed(1)}%</strong>
+              </article>
+              <article>
+                <span>평점</span>
+                <strong>{portfolioMentor.rating.toFixed(1)}</strong>
+              </article>
+              <article>
+                <span>멘티 수</span>
+                <strong>{portfolioMentor.menteeCount}명</strong>
+              </article>
+            </div>
+
+            <section className="portfolio-note">
+              <span>구독 전 확인</span>
+              <p>
+                이 멘토의 코칭 방식이 맞다고 판단되면 구독 상품을 확인하세요. 실제 결제 대신
+                버튼을 누르면 코칭 보드 연결 흐름을 시연합니다.
+              </p>
+            </section>
+
+            <div className="modal-actions">
+              <button className="ghost-button" onClick={() => setPortfolioMentor(null)}>
+                다른 멘토 보기
+              </button>
+              <button className="solid-button" onClick={() => openPlan(portfolioMentor)}>
+                구독 상품 보기
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {pendingMentor ? (
         <div className="modal-backdrop" onClick={() => setPendingMentor(null)}>
@@ -625,11 +988,11 @@ function App() {
             </div>
 
             <div className="modal-actions">
-              <button className="ghost-button" onClick={() => setPendingMentor(null)}>
-                나중에 선택
+              <button className="ghost-button" onClick={returnToPortfolio}>
+                돌아가기
               </button>
               <button className="solid-button" onClick={completeSubscription}>
-                구독 결제하고 코칭 보드로 이동
+                결제하기
               </button>
             </div>
           </section>
